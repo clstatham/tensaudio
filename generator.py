@@ -18,7 +18,8 @@ def prep_hilb_for_net(t):
     #print("------------------------------------ First 10 samples (amp, phase):")
     #for i in range(10):
     #    print(float(amp[i].numpy()), " || ", float(phase[i].numpy()))
-    z = tf.convert_to_tensor(list(zip(amp, phase)))
+    z = np.dstack((amp, phase))
+    z = tf.convert_to_tensor(z)
     hilb = tf.reshape(z, (N_BATCHES, N_TIMESTEPS, 2*N_UNITS//N_BATCHES))
     return hilb
 def prep_hilb_for_dis(t):
