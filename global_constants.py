@@ -1,7 +1,7 @@
 RESOURCES_DIR = "D:\\tensaudio_resources"
-EXAMPLES_DIR = "examples"
+EXAMPLES_DIR = "examples_speech"
 EXAMPLE_RESULTS_DIR = "example_results"
-INPUTS_DIR = "inputs"
+INPUTS_DIR = "inputs_speech"
 
 MODEL_DIR = "D:\\tensaudio_models"
 

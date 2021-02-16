@@ -166,9 +166,19 @@ def get_random_example_result():
     return y
 
 # a, p = my_hilbert(select_input(0))
+# fig0 = plt.figure()
+# plt.plot(range(len(select_input(0))), select_input(0))
+# plt.show()
+# fig1 = plt.figure()
+# plt.plot(range(len(a)), a, color='red')
+# plt.show()
+# fig2 = plt.figure()
+# plt.plot(range(len(p)), p, color='red')
+# plt.show()
 # y = inverse_hilbert(a, p)
-# y += inverse_hilbert_cos(a, p)
-# y += inverse_hilbert_sin(a, p)
+# fig4 = plt.figure()
+# plt.plot(range(len(y)), y)
+# plt.show()
 # scaled1 = np.int16(y/np.max(np.abs(y)) * 32767)
 # soundfile.write('test.wav', scaled1, SAMPLE_RATE, SUBTYPE)
 

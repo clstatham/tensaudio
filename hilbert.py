@@ -3,6 +3,8 @@ import numpy as np
 import tensorflow as tf
 import scipy.signal
 
+from global_constants import *
+
 def hilbert_from_scratch(u):
     # N : fft length
     # M : number of elements to zero out
@@ -56,7 +58,7 @@ def spectral_convolution(in1, in2):
     return tf.math.real(tf.signal.ifft(conv))
 
 def inst_freq(inst_phase):
-    return (np.diff(inst_phase) / (2.0*np.pi) * SAMPLE_RATE)+[0.]+[0.]
+    return (np.diff(inst_phase) / (2.0*np.pi) * len(inst_phase))
 
 def inverse_hilbert_cos(amplitude_envelope, instantaneous_phase):
     T = len(instantaneous_phase)
@@ -77,13 +79,14 @@ def inverse_hilbert_sin(amplitude_envelope, instantaneous_phase):
         sin.append(amplitude_envelope[i] * np.sum((sp[-i]-sp[i]).imag/(2*T) * np.sin(2.*np.pi*freq[i] + instantaneous_phase[i])))
     return sin
 def inverse_hilbert(amplitude_envelope, instantaneous_phase):
-    cos = inverse_hilbert_cos(amplitude_envelope, instantaneous_phase)
-    sin = inverse_hilbert_sin(amplitude_envelope, instantaneous_phase)
-    assert(len(cos) == len(sin))
-    out = []
-    for i in range(len(cos)):
-        out.append(cos[i] + sin[i])
-    return out
+    # cos = inverse_hilbert_cos(amplitude_envelope, instantaneous_phase)
+    # sin = inverse_hilbert_sin(amplitude_envelope, instantaneous_phase)
+    # assert(len(cos) == len(sin))
+    #out = []
+    #for i in range(len(cos)):
+    #    out.append(cos[i] + sin[i])
+    #return out
+    return np.concatenate(([0], inst_freq(instantaneous_phase))) * amplitude_envelope
 
 def hilb_tensor(amp, phase):
     amp = tf.cast(amp, tf.float32)
