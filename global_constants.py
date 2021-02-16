@@ -1,0 +1,27 @@
+RESOURCES_DIR = "D:\\tensaudio_resources"
+EXAMPLES_DIR = "examples"
+EXAMPLE_RESULTS_DIR = "example_results"
+INPUTS_DIR = "inputs"
+
+MODEL_DIR = "D:\\tensaudio_models"
+
+SAVE_EVERY_ITERS = 50
+SAVE_MODEL_EVERY_ITERS = 50
+
+SAMPLE_RATE = 8000
+#TARGET_SR = 44100
+#TARGET_SR = 11025
+SUBTYPE = 'PCM_16'
+N_FFT = 2048
+N_LAYERS = 16
+N_TIMESTEPS = 50
+N_BATCHES = 4
+GENERATOR_LR = 0.1
+DISCRIMINATOR_LR = 0.2
+SLICE_START = 0
+SECONDS_OF_AUDIO = 2
+TARGET_LEN_OVERRIDE = SAMPLE_RATE * SECONDS_OF_AUDIO
+if TARGET_LEN_OVERRIDE % N_TIMESTEPS != 0:
+    raise ValueError("Total length of audio not divisible by", N_TIMESTEPS)
+N_UNITS = TARGET_LEN_OVERRIDE // N_TIMESTEPS
+print("Will create", N_LAYERS, "layers of", N_UNITS, "units.")
