@@ -3,3 +3,4 @@
 *.wav
 *.pyc
 __pycache__/generator.cpython-38.pyc
+*.pyc
