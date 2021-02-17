@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorflow import keras
 import tensorflow.keras.backend as K
 from tensorflow.keras.layers import Dropout, Bidirectional, \
-    GRU, RNN, Layer, LSTM, LSTMCell, Dense, Flatten, Conv1D, Conv2D, \
+    GRU, SimpleRNN, Layer, LSTM, LSTMCell, Dense, Flatten, Conv1D, Conv2D, \
         Conv1DTranspose, Reshape, Cropping1D, Lambda, Multiply, LeakyReLU
 from tensorflow.keras import Model
 
@@ -12,69 +12,66 @@ from helper import *
 from hilbert import *
 from global_constants import *
 
+@tf.function
 def prep_hilb_for_rnn(t):
-    amp = tf.squeeze(t[0])
-    phase = tf.squeeze(t[1])
-    z = np.dstack((amp, phase))
-    z = tf.convert_to_tensor(z)
-    hilb = tf.reshape(z, (N_BATCHES, N_TIMESTEPS, 2*N_UNITS//N_BATCHES))
+    #z = tf.Variable(np.dstack((tf.squeeze(t[0]), tf.squeeze(t[1]))), trainable=False)
+    hilb = tf.convert_to_tensor(tf.reshape(t, (2*N_BATCHES, N_TIMESTEPS, N_UNITS//2)))
     return hilb
 
+@tf.function
 def prep_hilb_for_deconv(t):
-    z = tf.squeeze(t)
-    z = K.flatten(z)
-    hilb = tf.reshape(z, (N_BATCHES, N_TIMESTEPS, 2*N_UNITS//N_BATCHES))
+    #z = tf.Variable(np.dstack((tf.squeeze(t[0]), tf.squeeze(t[1]))), trainable=False)
+    hilb = tf.convert_to_tensor(tf.reshape(t, (2*N_BATCHES, N_TIMESTEPS, N_UNITS//2)))
     return hilb
 
+@tf.function
 def prep_hilb_for_dense(t):
-    amp = tf.squeeze(t[0])
-    phase = tf.squeeze(t[1])
-    z = np.dstack((amp, phase))
-    z = tf.convert_to_tensor(z)
-    z = tf.expand_dims(z, axis=0)
-    hilb = tf.reshape(z, (N_BATCHES, N_TIMESTEPS, 2*N_UNITS//N_BATCHES))
+    #z = tf.Variable(np.dstack((tf.squeeze(t[0]), tf.squeeze(t[1]))), trainable=False)
+    hilb = tf.convert_to_tensor(tf.reshape(t, (2*N_BATCHES, N_TIMESTEPS, N_UNITS//2)))
     return hilb
 
+@tf.function
 def prep_hilb_for_dis(t):
-    t = tf.squeeze(t)
-    hilb = tf.reshape(t, (N_BATCHES, 1, TARGET_LEN_OVERRIDE//N_BATCHES))
+    #z = tf.Variable(np.dstack((tf.squeeze(t[0]), tf.squeeze(t[1]))), trainable=False)
+    hilb = tf.convert_to_tensor(tf.reshape(t, (N_BATCHES, 1, TARGET_LEN_OVERRIDE//N_BATCHES)))
     return hilb
 
+@tf.function
 def flatten_hilb(t):
-    tmp = K.flatten(t)
-    amp = tmp[::2]
-    phase = tmp[1::2]
+    tmp = tf.Variable(K.flatten(t), trainable=False)
+    return hilb_tensor(tmp[::2], tmp[1::2])
 
-    return hilb_tensor(amp, phase)
+def prep_audio_for_batch_operation(t):
+    return tf.reshape(t, (N_BATCHES, N_TIMESTEPS, N_UNITS))
 
-cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
-
-class Hilbert_Generator(tf.keras.Model):
+class TA_Generator(tf.keras.Model):
     def __init__(self, **kwargs):
-        super(Hilbert_Generator, self).__init__(**kwargs)
+        super(TA_Generator, self).__init__(**kwargs)
         self.rnn_state = None
 
         self.N_DECONV_FILTERS = (TARGET_LEN_OVERRIDE // (N_DECONV_LAYERS+1))
 
         if GEN_MODE == 1:
-            self.hilb_rnns = []
-            for l in range(N_LAYERS):
-                layer_f = GRU(N_UNITS*2, return_state=True, stateful=True, time_major=True, go_backwards=False, name="f_hilb_rnn_"+str(l))
-                layer_b = GRU(N_UNITS*2, return_state=True, stateful=True, time_major=True, go_backwards=True, name="b_hilb_rnn_"+str(l))
-                self.hilb_rnns.append(Bidirectional(layer_f, backward_layer=layer_b, merge_mode='ave'))
+            self.audio_rnns = []
+            self.audio_rnns.append(LSTM(N_UNITS, return_state=True, stateful=True, time_major=True, go_backwards=False, name="f_audio_rnn_0", input_shape=(N_BATCHES, N_TIMESTEPS, N_UNITS)))
+            for l in range(N_LAYERS-1):
+                layer_f = LSTM(N_UNITS, return_state=True, stateful=True, time_major=True, go_backwards=False, name="f_audio_rnn_"+str(l+1))
+                #layer_b = SimpleRNN(N_UNITS*2, return_state=True, stateful=True, time_major=True, go_backwards=True, name="b_audio_rnn_"+str(l))
+                #self.audio_rnns.append(Bidirectional(layer_f, backward_layer=layer_b, merge_mode='ave'))
+                self.audio_rnns.append(layer_f)
         elif GEN_MODE == 0:
-            self.hilb_denses = []
-            self.hilb_deconv = []
-            self.hilb_denses.append(Dense(N_UNITS//N_DENSE_LAYERS, activation=tf.keras.activations.tanh, input_shape=[TARGET_LEN_OVERRIDE]))
-            for _ in range(N_DENSE_LAYERS-1):
-                self.hilb_denses.append(Dense(N_UNITS//2, activation=tf.keras.activations.tanh))
+            self.audio_denses = []
+            self.audio_deconv = []
+            self.audio_denses.append(Dense(N_UNITS//N_DENSE_LAYERS, activation=tf.keras.activations.tanh, input_shape=(N_BATCHES, N_TIMESTEPS, N_UNITS), name="audio_dense_0"))
+            for l in range(N_DENSE_LAYERS-1):
+                self.audio_denses.append(Dense(N_UNITS, activation=tf.keras.activations.tanh, name="audio_dense_"+str(l)))
             for i in range(1, N_DECONV_LAYERS):
                 n_filts = i*self.N_DECONV_FILTERS
                 v_print("Creating deconvolution layer with", n_filts, "filters.")
-                self.hilb_deconv.append(Conv1DTranspose(n_filts, kernel_size=1, strides=1, padding='same'))
-            v_print("Creating deconvolution layer with", TARGET_LEN_OVERRIDE // N_TIMESTEPS, "filters.")
-            self.hilb_deconv.append(Conv1DTranspose(TARGET_LEN_OVERRIDE // N_TIMESTEPS, kernel_size=1, strides=1, padding='same'))
-            #self.hilb_denses.append(Dense(TARGET_LEN_OVERRIDE, activation=tf.keras.activations.tanh))
+                self.audio_deconv.append(Conv1DTranspose(n_filts, kernel_size=1, strides=1, padding='same', name="audio_conv1dt_"+str(i-1)))
+            v_print("Creating deconvolution layer with", N_UNITS, "filters.")
+            self.audio_deconv.append(Conv1DTranspose(N_UNITS, kernel_size=1, strides=1, padding='same', name="audio_conv1dt_"+str(N_DECONV_LAYERS-1)))
+            #self.audio_denses.append(Dense(TARGET_LEN_OVERRIDE, activation=tf.keras.activations.tanh))
             
         self.optimizer = tf.keras.optimizers.Adam(GENERATOR_LR, 0.5)
         self.ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=self.optimizer, net=self)
@@ -86,77 +83,86 @@ class Hilbert_Generator(tf.keras.Model):
         else:
             print("Generator Initializing from scratch.")
    
+    @tf.function
     def loss(self, op):
-        return cross_entropy(tf.ones_like(op), op)
+        return tf.keras.losses.BinaryCrossentropy(from_logits=True)(tf.ones_like(op), op)
     
     def gen_rnn(self, inputs, training=False):
         assert(GEN_MODE == 1)
 
-        x = my_hilbert(inputs)
-        hilb = hilb_tensor(x[0], x[1])
-        amp, phase = hilb[0], hilb[1]
+        # amp, phase = audio[0], audio[1]
 
-        amp = tf.cast(amp, tf.float32)
-        phase = tf.cast(phase, tf.float32)
-        amp = tf.expand_dims(amp, axis=0)
-        phase = tf.expand_dims(phase, axis=0)
-        amp = tf.expand_dims(amp, axis=0)
-        phase = tf.expand_dims(phase, axis=0)
+        # amp = tf.cast(amp, tf.float32)
+        # phase = tf.cast(phase, tf.float32)
+        # amp = tf.expand_dims(amp, axis=0)
+        # phase = tf.expand_dims(phase, axis=0)
+        # amp = tf.expand_dims(amp, axis=0)
+        # phase = tf.expand_dims(phase, axis=0)
         
-        amp_dim1 = amp.shape[0]
-        amp_dim2 = amp.shape[1]
-        amp_dim3 = amp.shape[2]
-        phase_dim1 = phase.shape[0]
-        phase_dim2 = phase.shape[1]
-        phase_dim3 = phase.shape[2]
+        # amp_dim1 = amp.shape[0]
+        # amp_dim2 = amp.shape[1]
+        # amp_dim3 = amp.shape[2]
+        # phase_dim1 = phase.shape[0]
+        # phase_dim2 = phase.shape[1]
+        # phase_dim3 = phase.shape[2]
 
-        hilb = hilb_tensor(amp, phase)
-        hilb = prep_hilb_for_rnn(hilb)
-        hilb.set_shape((N_BATCHES, N_TIMESTEPS, 2*N_UNITS//N_BATCHES))
+        audio = hilb_tensor(amp, phase)
+        audio = prep_audio_for_batch_operation(audio)
+        #audio.set_shape((2*N_BATCHES, N_TIMESTEPS, N_UNITS//2))
 
         if self.rnn_state is None:
-            f_state1 = self.hilb_rnns[0].forward_layer.get_initial_state(hilb)
-            b_state1 = self.hilb_rnns[0].backward_layer.get_initial_state(hilb)
+            f_state1 = self.audio_rnns[0].get_initial_state(audio)
+            #b_state1 = self.audio_rnns[0].backward_layer.get_initial_state(audio)
         else:
-            f_state1, b_state1 = self.rnn_state
+            #f_state1, b_state1 = self.rnn_state
+            f_state1 = self.rnn_state
         f_state1 = f_state1[0]
-        b_state1 = b_state1[0]
+        #b_state1 = b_state1[0]
 
         v_print("|} Ready for launch! Going to the net now, wheeee!")
 
-        hilb, f_state1, b_state1 = self.hilb_rnns[0](hilb, initial_state=(f_state1, b_state1), training=training)
+        audio, f_state1 = self.audio_rnns[0](audio, initial_state=f_state1, training=training)
+        v_print("|} Layer 1 done.")
         for i in range(N_LAYERS-1):
-            hilb = tf.expand_dims(hilb, axis=0)
-            hilb, f_state1, b_state1 = self.hilb_rnns[i+1](hilb, initial_state=(f_state1, b_state1), training=training)
+            audio = tf.expand_dims(audio, axis=0)
+            audio, f_state1 = self.audio_rnns[i+1](audio, initial_state=f_state1, training=training)
+            v_print("|} Layer", i+2, "done.")
 
         v_print("|} Whew... Made it out of the net alive!")
 
-        self.rnn_state = (f_state1, b_state1)
-        hilb = flatten_hilb(hilb)
-        return hilb
+        self.rnn_state = f_state1
+        audio = K.flatten(audio)
+        return audio
 
     def gen_dense(self, inputs, training=False):
         assert(GEN_MODE == 0)
-        x = my_hilbert(inputs)
-        hilb = hilb_tensor(x[0], x[1])
+        #inputs = tf.expand_dims(inputs, axis=0)
+        #audio = my_audioert(inputs)
+        #audio = audio_tensor(x[0], x[1])
+        audio = inputs
         
-        hilb = prep_hilb_for_dense(hilb)
+        audio = prep_audio_for_batch_operation(audio)
         v_print("|} Ready for launch! Going to the net now, wheeee!")
         for i in range(N_DENSE_LAYERS):
-            hilb = self.hilb_denses[i](hilb)
-        hilb = prep_hilb_for_deconv(hilb)
+            audio = self.audio_denses[i](audio)
+        audio = prep_audio_for_batch_operation(audio)
         v_print("|} Deconvolving...")
         for i in range(N_DECONV_LAYERS):
-            hilb = self.hilb_deconv[i](hilb)
+            audio = self.audio_deconv[i](audio)
         v_print("|} Whew... Made it out of the net alive!")
         
-        hilb = tf.squeeze(hilb)
+        audio = tf.squeeze(audio)
 
-        hilb = flatten_hilb(hilb)
-        return hilb
+        audio = K.flatten(audio)
+        return audio
 
+    @tf.function
     def gen_fn(self, inputs, training=False):
-        return self.gen_dense(inputs, training)
+        if GEN_MODE == 0:
+            return self.gen_dense(inputs, training)
+        elif GEN_MODE == 1:
+            return self.gen_rnn(inputs, training)
     
+    @tf.function
     def call(self, inputs, training=False):
         return self.gen_fn(inputs, training)

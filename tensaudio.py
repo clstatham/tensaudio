@@ -14,7 +14,7 @@ import tensorflow.keras.backend as K
 from tensorflow import keras
 
 from discriminator import DPAM_Discriminator
-from generator import Hilbert_Generator
+from generator import TA_Generator, prep_hilb_for_dis
 from global_constants import *
 from helper import *
 from hilbert import *
@@ -166,20 +166,23 @@ class OneStep():
     def generate_one_step(self, inputs):
         predicted_logits = self.generator(inputs, training=False)
 
-        return invert_hilb_tensor(predicted_logits)
+        return predicted_logits
 
 @tf.function
 def create_input(i, dirname):
         x = get_random_example()
         y = get_random_example_result()
 
-        y = spectral_convolution(x, y).numpy()
+        y = spectral_convolution(x, y)
         
-        if i % SAVE_EVERY_ITERS == 0 and dirname is not None:
-            print("Writing convolved result to disk.")
-            scaled1 = np.int16(y/np.max(np.abs(y)) * 32767)
-            soundfile.write(dirname+'/example_result_'+str(i)+'_'+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav', scaled1, SAMPLE_RATE, SUBTYPE)
+        # if i % SAVE_EVERY_ITERS == 0 and dirname is not None:
+        #     print("Writing convolved result to disk.")
+        #     scaled1 = np.int16(y/np.max(np.abs(y)) * 32767)
+        #     soundfile.write(dirname+'/example_result_'+str(i)+'_'+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav', scaled1, SAMPLE_RATE, SUBTYPE)
         return x, y
+
+gen_tape = tf.GradientTape(persistent=False)
+dis_tape = tf.GradientTape(persistent=False)
 
 @tf.function
 def train_on_random(i, dirname):
@@ -188,26 +191,26 @@ def train_on_random(i, dirname):
     noise = tf.random.normal([TARGET_LEN_OVERRIDE])
     v_print("Passing training data to models.")
     begin_time = time.time()
-    with tf.GradientTape() as gen_tape, tf.GradientTape() as dis_tape:
+    with gen_tape, dis_tape:
         v_print("| Generating...")
-        g = gen(x, training=True)
+        g = gen.gen_fn(x, training=True)
         record_amp_phase(g[0], g[1])
         v_print("| Discriminating...")
-        g = invert_hilb_tensor(g)
+        #h = invert_hilb_tensor(g)
         real_o = dis(z, y)
         fake_o = dis(z, g)
         v_print("| Calculating Loss...")
         gen_loss = gen.loss(fake_o)
         dis_loss = dis.loss(real_o, fake_o)[0]
-        v_print("|] Gen Loss:", float(gen_loss))
-        v_print("|] Dis Loss:", float(dis_loss))
-        total_gen_losses.append(gen_loss)
-        total_dis_losses.append(dis_loss)
+    total_gen_losses.append(gen_loss)
+    total_dis_losses.append(dis_loss)
     v_print("| Applying gradients...")
     gen_grads = gen_tape.gradient(gen_loss, gen.trainable_weights)
-    dis_grads = dis_tape.gradient(dis_loss, dis.trainable_weights)
     gen.optimizer.apply_gradients(zip(gen_grads, gen.trainable_weights))
+    dis_grads = dis_tape.gradient(dis_loss, dis.trainable_weights)
     dis.optimizer.apply_gradients(zip(dis_grads, dis.trainable_weights))
+    print("|] Gen Loss:", float(gen_loss))
+    print("|] Dis Loss:", float(dis_loss))
     time_diff = time.time() - begin_time
     print("Models successfully trained in", str(round(time_diff, ndigits=2)), "seconds.")
     if i % SAVE_MODEL_EVERY_ITERS == 0:
@@ -215,7 +218,6 @@ def train_on_random(i, dirname):
         gen.manager.save(i)
         dis.manager.save(i)
     
-
     return g
 
 
@@ -275,9 +277,9 @@ EXAMPLE_RESULTS = iterate_and_resample(EXAMPLE_RESULT_FILES)
 v_print("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
 strategy = tf.distribute.MirroredStrategy()
-gen = Hilbert_Generator()
-dis = DPAM_Discriminator()
-with strategy.scope():
+with strategy.scope(), gen_tape, dis_tape:
+    gen = TA_Generator()
+    dis = DPAM_Discriminator()
     gen.compile(optimizer=gen.optimizer, loss=gen.loss)
     dis.compile(optimizer=dis.optimizer, loss=dis.loss)
 

@@ -1,6 +1,7 @@
 import six
 import numpy as np
 import tensorflow as tf
+import tensorflow.keras.backend as K
 import scipy.signal
 
 from global_constants import *
@@ -54,17 +55,16 @@ def hilbert_from_scratch(u):
     return v
 
 def my_hilbert(inp):
-    analytic_signal = scipy.signal.hilbert(inp)
-    amplitude_envelope = np.abs(analytic_signal)
-    instantaneous_phase = np.unwrap(np.angle(analytic_signal))
-    return amplitude_envelope, instantaneous_phase
+    analytic_signal = tf.numpy_function(scipy.signal.hilbert, (tf.expand_dims(inp, axis=0)), tf.complex64)
+    amplitude_envelope = tf.abs(analytic_signal)
+    instantaneous_phase = tf.numpy_function(
+        np.unwrap, tf.expand_dims(tf.numpy_function(np.angle,
+        (tf.expand_dims(analytic_signal, axis=0)), tf.float64), axis=0), tf.float64)
+    return tf.cast(amplitude_envelope, tf.float32), tf.cast(instantaneous_phase, tf.float32)
 
-def inverse_hilbert_old(amp, phase):
-    # this is broken i think, do not use
-    return inverse_hilbert_sin(amp, phase) + inverse_hilbert_cos(amp, phase)
 def inverse_hilbert(amplitude_envelope, instantaneous_phase):
     # close enough i guess
-    return np.concatenate(([0], inst_freq(instantaneous_phase))) * amplitude_envelope
+    return tf.concat(([0.], inst_freq(instantaneous_phase)), axis=0) * amplitude_envelope
 
 def hilb_tensor(amp, phase):
     amp = tf.cast(amp, tf.float32)
