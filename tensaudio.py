@@ -185,7 +185,7 @@ def train_on_random(i, dirname):
     _, z = create_inputs()
     if not USE_REAL_AUDIO:
         x = tf.random.normal([TARGET_LEN_OVERRIDE])
-    if i % SAVE_EVERY_ITERS == 0 and dirname is not None:
+    if SAVE_EVERY_ITERS > 0 and i % SAVE_EVERY_ITERS == 0 and dirname is not None:
         print("Writing training data to disk.")
         timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
         scaled1 = np.int16(normalize_audio(x) * 32767)
@@ -201,12 +201,11 @@ def train_on_random(i, dirname):
         g = gen.gen_fn(x, training=True)
         record_amp_phase(g[0], g[1])
         v_print("| Discriminating...")
-        #h = invert_hilb_tensor(g)
         real_o = dis(z, y)
         fake_o = dis(z, g)
         v_print("| Calculating Loss...")
         gen_loss = gen.loss(fake_o)
-        dis_loss = dis.loss(real_o, fake_o)[0]
+        dis_loss = dis.loss(real_o, fake_o)
     total_gen_losses.append(gen_loss)
     total_dis_losses.append(dis_loss)
     v_print("| Applying gradients...")
@@ -214,11 +213,13 @@ def train_on_random(i, dirname):
     gen.optimizer.apply_gradients(zip(gen_grads, gen.trainable_weights))
     dis_grads = dis_tape.gradient(dis_loss, dis.trainable_weights)
     dis.optimizer.apply_gradients(zip(dis_grads, dis.trainable_weights))
-    print("|] Gen Loss:", float(gen_loss))
-    print("|] Dis Loss:", float(dis_loss))
+    print("|] Fake Verdict:\t", round(float(fake_o), 3))
+    print("|] Real Verdict:\t", round(float(real_o), 3))
+    print("|] Gen Loss:\t\t", round(float(gen_loss), 3))
+    print("|] Dis Loss:\t\t", round(float(dis_loss), 3))
     time_diff = time.time() - begin_time
     print("Models successfully trained in", str(round(time_diff, ndigits=2)), "seconds.")
-    if i % SAVE_MODEL_EVERY_ITERS == 0:
+    if SAVE_MODEL_EVERY_ITERS > 0 and i % SAVE_MODEL_EVERY_ITERS == 0:
         print("Saving checkpoints for models...")
         gen.manager.save(i)
         dis.manager.save(i)
@@ -241,7 +242,7 @@ def train_until_interrupt():
             v_print("*"*40)
             print("Initiating iteration #", i)
             train_on_random(i, dirname)
-            if i % SAVE_EVERY_ITERS == 0:
+            if SAVE_EVERY_ITERS > 0 and i % SAVE_EVERY_ITERS == 0:
                 print("Generating progress update...")
                 begin_time = time.time()
                 plot_metrics(i, show=False)

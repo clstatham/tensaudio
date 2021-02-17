@@ -3,6 +3,7 @@ from __future__ import absolute_import
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Model
+import tensorflow.keras.backend as K
 from network_model import *
 from helper import *
 from global_constants import *
@@ -58,13 +59,15 @@ class DPAM_Discriminator(tf.keras.Model):
         others,loss_sum = featureloss_batch(input1_wav,clean1_wav,keep_prob,loss_layers=SE_LOSS_LAYERS,n_layers=LOSS_LAYERS, norm_type=LOSS_NORM, base_channels=LOSS_BASE_CHANNELS,blk_channels=LOSS_BLK_CHANNELS,ksz=FILTER_SIZE) 
 
         res=tf.reduce_sum(others,0)
-        distance=res
+        distance=K.log(res)
         
-        dist_sigmoid=tf.nn.sigmoid(distance)
-        dist_sigmoid_1=tf.reshape(dist_sigmoid,[-1,1,1])
+        distance=tf.nn.sigmoid(distance)
+        dist_1=tf.reshape(distance,[-1,1,1])
         
-        self.dense3=tf.keras.layers.Dense(16,activation=tf.nn.relu)(dist_sigmoid_1)
-        self.dense4=tf.keras.layers.Dense(6,activation=tf.nn.relu)(self.dense3)
-        self.dense2=tf.keras.layers.Dense(2,None)(self.dense4)
-        self.net1 = tf.nn.softmax(self.dense2)
+        self.dense1=tf.keras.layers.Dense(16)(dist_1)
+        self.dense2=tf.keras.layers.Dense(6)(self.dense1)
+        self.dense3=tf.keras.layers.Dense(2)(self.dense2)
+        self.dense4=tf.keras.layers.Dense(1)(self.dense3)
+        #self.net1 = tf.nn.softmax(self.dense1)
+        self.net1 = K.flatten(self.dense4)
         return self.net1

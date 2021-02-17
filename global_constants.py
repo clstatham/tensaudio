@@ -10,17 +10,19 @@ TRAINING_DIR = "D:\\tensaudio_training"
 
 MODEL_DIR = "D:\\tensaudio_models"
 
-SAVE_EVERY_ITERS = 250*10 # approx. every 30 minutes
-SAVE_MODEL_EVERY_ITERS = 250*60 # approx. every hour
+# set to 0 to disable periodically generating progress updates
+SAVE_EVERY_ITERS = 50
+# set to 0 to disable periodically saving model
+SAVE_MODEL_EVERY_ITERS = 50*60
 
-VERBOSE_OUTPUT = True
+VERBOSE_OUTPUT = False
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
 # an error!
 GEN_MODE = 0 # 0 = convolution/dense/deconvolution mode, 1 = RNN mode
 USE_REAL_AUDIO = True
-SAMPLE_RATE = 24000
+SAMPLE_RATE = 8000
 SUBTYPE = 'PCM_16'
 SECONDS_OF_AUDIO = 4
 SLICE_START = 0

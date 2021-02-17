@@ -100,7 +100,7 @@ class TA_Generator(tf.keras.Model):
    
     @tf.function
     def loss(self, op):
-        return tf.keras.losses.BinaryCrossentropy(from_logits=True)(tf.ones_like(op), op)
+        return tf.keras.losses.BinaryCrossentropy(from_logits=True)(tf.zeros_like(op), op)
     
     def gen_rnn(self, inputs, training=False):
         assert(GEN_MODE == 1)
