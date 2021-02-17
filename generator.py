@@ -26,14 +26,13 @@ def prep_hilb_for_dis(t):
     t = tf.squeeze(t)
     hilb = tf.reshape(t, (N_BATCHES, 1, TARGET_LEN_OVERRIDE//N_BATCHES))
     return hilb
-def hilb_post_net(t):
-    hilb = tf.reshape(t, (2, TARGET_LEN_OVERRIDE))
-    amp = tf.squeeze(t[0])
-    phase = tf.squeeze(t[1])
-    #print("------------------------------------ First 10 samples (amp, phase):")
-    #for i in range(10):
-    #    print(float(amp[i].numpy()), " || ", float(phase[i].numpy()))
-    return hilb
+
+def flatten_hilb(t):
+    tmp = K.flatten(t)
+    amp = tmp[::2]
+    phase = tmp[1::2]
+
+    return hilb_tensor(amp, phase)
 
 cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
@@ -113,6 +112,6 @@ class Hilbert_Generator(tf.keras.Model):
 
         print("|} Whew... Made it out of the net alive!")
 
-        hilb = hilb_post_net(hilb)
+        hilb = flatten_hilb(hilb)
 
         return hilb, (f_state1, b_state1)
