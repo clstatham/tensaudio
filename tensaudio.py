@@ -113,28 +113,28 @@ def iterate_and_resample(files):
 
 def select_input(idx):
     x = tf.cast(INPUTS[idx], tf.float32)
-    if x.shape[0] < TARGET_LEN_OVERRIDE:
-        x = K.concatenate((x, [0]*(TARGET_LEN_OVERRIDE-x.shape[0])))
+    if x.shape[0] < TOTAL_SAMPLES:
+        x = K.concatenate((x, [0]*(TOTAL_SAMPLES-x.shape[0])))
 
-    x = x[SLICE_START:TARGET_LEN_OVERRIDE]
+    x = x[SLICE_START:TOTAL_SAMPLES]
     return normalize_audio(x)
 
 def get_example(idx):
     x = tf.cast(EXAMPLES[idx], tf.float32)
-    if x.shape[0] < TARGET_LEN_OVERRIDE:
-        x = K.concatenate((x, [0]*(TARGET_LEN_OVERRIDE-x.shape[0])))
+    if x.shape[0] < TOTAL_SAMPLES:
+        x = K.concatenate((x, [0]*(TOTAL_SAMPLES-x.shape[0])))
 
-    x = x[SLICE_START:TARGET_LEN_OVERRIDE]
+    x = x[SLICE_START:TOTAL_SAMPLES]
     return normalize_audio(x)
 def get_random_example():
     return get_example(np.random.randint(len(EXAMPLES)))
 
 def get_example_result(idx):
     x = tf.cast(EXAMPLE_RESULTS[idx], tf.float32)
-    if x.shape[0] < TARGET_LEN_OVERRIDE:
-        x = K.concatenate((x, [0]*(TARGET_LEN_OVERRIDE-x.shape[0])))
+    if x.shape[0] < TOTAL_SAMPLES:
+        x = K.concatenate((x, [0]*(TOTAL_SAMPLES-x.shape[0])))
 
-    x = x[SLICE_START:TARGET_LEN_OVERRIDE]
+    x = x[SLICE_START:TOTAL_SAMPLES]
     return normalize_audio(x)
 def get_random_example_result():
     return get_example_result(np.random.randint(len(EXAMPLE_RESULTS)))
@@ -173,8 +173,12 @@ def create_inputs():
         x = get_random_example()
         y = get_random_example_result()
 
-        y = spectral_convolution(x, y)
+        if INPUT_MODE == 'conv':
+            y = spectral_convolution(x, y)
         return x, y
+
+def generate_input_noise():
+    return tf.random.normal([N_BATCHES*N_TIMESTEPS])
 
 gen_tape = tf.GradientTape(persistent=False)
 dis_tape = tf.GradientTape(persistent=False)
@@ -184,7 +188,7 @@ def train_on_random(i, dirname):
     x, y = create_inputs()
     _, z = create_inputs()
     if not USE_REAL_AUDIO:
-        x = tf.random.normal([TARGET_LEN_OVERRIDE])
+        x = generate_input_noise()
     if SAVE_EVERY_ITERS > 0 and i % SAVE_EVERY_ITERS == 0 and dirname is not None:
         print("Writing training data to disk.")
         timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
@@ -198,7 +202,7 @@ def train_on_random(i, dirname):
     begin_time = time.time()
     with gen_tape, dis_tape:
         v_print("| Generating...")
-        g = gen.gen_fn(x, training=True)
+        g = gen(x, training=True)
         record_amp_phase(g[0], g[1])
         v_print("| Discriminating...")
         real_o = dis(z, y)
@@ -213,10 +217,10 @@ def train_on_random(i, dirname):
     gen.optimizer.apply_gradients(zip(gen_grads, gen.trainable_weights))
     dis_grads = dis_tape.gradient(dis_loss, dis.trainable_weights)
     dis.optimizer.apply_gradients(zip(dis_grads, dis.trainable_weights))
-    print("|] Fake Verdict:\t", round(float(fake_o), 3))
-    print("|] Real Verdict:\t", round(float(real_o), 3))
-    print("|] Gen Loss:\t\t", round(float(gen_loss), 3))
-    print("|] Dis Loss:\t\t", round(float(dis_loss), 3))
+    print("|] Fake Verdict:\t", round(float(fake_o), 4))
+    print("|] Real Verdict:\t", round(float(real_o), 4))
+    print("|] Gen Loss:\t\t", round(float(gen_loss), 4))
+    print("|] Dis Loss:\t\t", round(float(dis_loss), 4))
     time_diff = time.time() - begin_time
     print("Models successfully trained in", str(round(time_diff, ndigits=2)), "seconds.")
     if SAVE_MODEL_EVERY_ITERS > 0 and i % SAVE_MODEL_EVERY_ITERS == 0:
@@ -246,9 +250,11 @@ def train_until_interrupt():
                 print("Generating progress update...")
                 begin_time = time.time()
                 plot_metrics(i, show=False)
-                out1 = onestep.generate_one_step(select_input(0))
-                scaled1 = np.int16(normalize_audio(out1) * 32767)
-                soundfile.write(dirname+'/progress'+str(i)+"_"+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav', scaled1, SAMPLE_RATE, SUBTYPE)
+                if USE_REAL_AUDIO:
+                    out1 = onestep.generate_one_step(select_input(0))
+                else:
+                    out1 = onestep.generate_one_step(generate_input_noise())
+                write_normalized_audio_to_disk(out1, dirname+'/progress'+str(i)+"_"+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav')
                 time_diff = time.time() - begin_time
                 print("Progress update generated in", str(round(time_diff, ndigits=2)), "seconds.")
             i += 1
@@ -293,11 +299,12 @@ if __name__ == "__main__":
     i = train_until_interrupt()
 
     print("Generating...")
-    inp = select_input(0)
-    data = onestep.generate_one_step(inp)
+    if USE_REAL_AUDIO:
+        data = onestep.generate_one_step(select_input(0))
+    else:
+        data = onestep.generate_one_step(generate_input_noise())
     print("Done!")
 
-    scaled1 = np.int16(normalize_audio(data) * 32767)
-    soundfile.write('out1.wav', scaled1, SAMPLE_RATE, SUBTYPE)
+    write_normalized_audio_to_disk(data, 'out1.wav')
 
-    plot_metrics(i, show=True)
+    plot_metrics(i)

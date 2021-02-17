@@ -4,6 +4,8 @@ import tensorflow as tf
 import tensorflow.keras
 from sklearn.preprocessing import normalize
 
+import soundfile
+
 from global_constants import *
 
 # LEAKY RELU UNIT
@@ -299,3 +301,6 @@ def prep_audio_for_batch_operation(t):
   #return tf.reshape(t, (N_BATCHES, 2, 1))
 def normalize_audio(a):
   return a/np.max(np.abs(a))
+def write_normalized_audio_to_disk(a, fn):
+  scaled = np.int16(normalize_audio(a) * 32767)
+  soundfile.write(fn, scaled, SAMPLE_RATE, SUBTYPE)

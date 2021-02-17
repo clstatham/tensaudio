@@ -1,9 +1,9 @@
 import numpy as np
 
 RESOURCES_DIR = "D:\\tensaudio_resources"
-EXAMPLES_DIR = "examples_speech"
-EXAMPLE_RESULTS_DIR = "example_results"
-INPUTS_DIR = "inputs_speech"
+EXAMPLES_DIR = "kicks"
+EXAMPLE_RESULTS_DIR = "fire"
+INPUTS_DIR = "inputs_kicks"
 
 PLOTS_DIR = "D:\\tensaudio_plots"
 TRAINING_DIR = "D:\\tensaudio_training"
@@ -11,28 +11,30 @@ TRAINING_DIR = "D:\\tensaudio_training"
 MODEL_DIR = "D:\\tensaudio_models"
 
 # set to 0 to disable periodically generating progress updates
-SAVE_EVERY_ITERS = 50
+SAVE_EVERY_ITERS = 100
 # set to 0 to disable periodically saving model
-SAVE_MODEL_EVERY_ITERS = 50*60
+SAVE_MODEL_EVERY_ITERS = 100*10
 
 VERBOSE_OUTPUT = False
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
 # an error!
+INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
+                        # 'conv' = comparison of example and convolved example result
 GEN_MODE = 0 # 0 = convolution/dense/deconvolution mode, 1 = RNN mode
-USE_REAL_AUDIO = True
-SAMPLE_RATE = 8000
+USE_REAL_AUDIO = False
+SAMPLE_RATE = 16000
 SUBTYPE = 'PCM_16'
-SECONDS_OF_AUDIO = 4
+SECONDS_OF_AUDIO = 6
 SLICE_START = 0
 N_RNN_LAYERS = 4
-N_CONV_LAYERS = 2
+N_PRE_DENSE_LAYERS = 1
 N_DENSE_LAYERS = 8
-N_DECONV_LAYERS = 1
+N_POST_DENSE_LAYERS = 1
 N_TIMESTEPS = 50
 KERNEL_SIZE = 16
-GENERATOR_LR = 0.5
+GENERATOR_LR = 0.001
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/dis_ckpts folder or the discsriminator model will give
@@ -41,40 +43,43 @@ N_DIS_LAYERS = 14
 DISCRIMINATOR_LR = 0.5
 
 # DO NOT CHANGE THESE
-TARGET_LEN_OVERRIDE = int(SAMPLE_RATE * SECONDS_OF_AUDIO) - SLICE_START
-N_BATCHES = TARGET_LEN_OVERRIDE // (KERNEL_SIZE * N_TIMESTEPS * 2)
-if TARGET_LEN_OVERRIDE % (KERNEL_SIZE * N_TIMESTEPS * 2) != 0:
+TOTAL_SAMPLES = int(SAMPLE_RATE * SECONDS_OF_AUDIO) - SLICE_START
+N_BATCHES = TOTAL_SAMPLES // (KERNEL_SIZE * N_TIMESTEPS * 2)
+if TOTAL_SAMPLES % (KERNEL_SIZE * N_TIMESTEPS * 2) != 0:
     raise ValueError("Could not calculate N_BATCHES: Total length of audio not divisible by", (KERNEL_SIZE * N_TIMESTEPS * 2))
-SAMPLES_PER_BATCH = TARGET_LEN_OVERRIDE // N_BATCHES
-if TARGET_LEN_OVERRIDE % N_BATCHES != 0:
+SAMPLES_PER_BATCH = TOTAL_SAMPLES // N_BATCHES
+if TOTAL_SAMPLES % N_BATCHES != 0:
     raise ValueError("Could not calculate SAMPLES_PER_BATCH: Total length of audio not divisible by", (KERNEL_SIZE * N_TIMESTEPS * 2))
-N_UNITS = TARGET_LEN_OVERRIDE // (N_TIMESTEPS * N_BATCHES)
+N_UNITS = TOTAL_SAMPLES // (N_TIMESTEPS * N_BATCHES)
 if N_UNITS <= KERNEL_SIZE:
     raise ValueError("N_UNITS must be greater than KERNEL_SIZE - pick a smaller N_TIMESTEPS!", N_UNITS)
-N_DECONV_BATCHES = N_BATCHES
-N_DECONV_FILTERS = TARGET_LEN_OVERRIDE // (2*(N_DECONV_LAYERS+1))
-if TARGET_LEN_OVERRIDE % (2*(N_DECONV_LAYERS+1)) != 0:
-    raise ValueError("Could not calculate N_DECONV_FILTERS: Total length of audio not divisible by", 2*(N_DECONV_LAYERS+1))
+N_POST_DENSE_BATCHES = N_BATCHES
+N_PRE_DENSE_FILTERS = SAMPLES_PER_BATCH // (2*(N_PRE_DENSE_LAYERS+1))
+if SAMPLES_PER_BATCH % (2*(N_PRE_DENSE_LAYERS+1)) != 0:
+    raise ValueError("Could not calculate N_POST_DENSE_FILTERS: Samples per batch not divisible by", 2*(N_PRE_DENSE_LAYERS+1))
+N_POST_DENSE_FILTERS = TOTAL_SAMPLES // (2*(N_POST_DENSE_LAYERS+1))
+if TOTAL_SAMPLES % (2*(N_POST_DENSE_LAYERS+1)) != 0:
+    raise ValueError("Could not calculate N_POST_DENSE_FILTERS: Total length of audio not divisible by", 2*(N_POST_DENSE_LAYERS+1))
 
 print("v-"*39 + "v")
-print("Total # of input samples:", TARGET_LEN_OVERRIDE)
+print("Total # of input samples:", TOTAL_SAMPLES)
 print("Timesteps per layer:", N_TIMESTEPS)
 print("Batches per layer:", N_BATCHES)
 print("Samples per batch:", SAMPLES_PER_BATCH)
-if GEN_MODE == 1:
-    print("Will create", N_RNN_LAYERS, "layers of", N_UNITS, "units.")
-elif GEN_MODE == 0:
-    print("Will create 1 convolution layer of", SAMPLES_PER_BATCH, "filters.")
-    if N_CONV_LAYERS > 1:
-        print("Will create", N_CONV_LAYERS-1, "convolution layers of", N_UNITS*N_TIMESTEPS, "filters.")
-    print("Will create", N_DENSE_LAYERS-1, "dense layers of", N_TIMESTEPS, "units.")
-    print("Will create 1 dense layer of", SAMPLES_PER_BATCH, "units.")
-    if N_DECONV_LAYERS > 1:
-        for i in range(1,N_DECONV_LAYERS):
-                n_filts = i*N_DECONV_FILTERS
-                print("Will create 1 deconvolution layer of", n_filts, "filters.")
-    else:
-        print("Will create 1 deconvolution layer of", N_UNITS*N_TIMESTEPS//20, "filters.")
+# if GEN_MODE == 1:
+#     print("Will create", N_RNN_LAYERS, "layers of", N_UNITS, "units.")
+# elif GEN_MODE == 0:
+#     print("Will create 1 Pre-Dense layer of", SAMPLES_PER_BATCH, "filters.")    
+#     if N_PRE_DENSE_LAYERS > 1:
+#         print("Will create", N_PRE_DENSE_LAYERS-1, "Pre-Dense layers of", N_UNITS*N_TIMESTEPS, "filters.")
+#     print("Will create", N_DENSE_LAYERS-1, "Dense layers of", SAMPLES_PER_BATCH, "units.")
+#     print("Will create 1 Dense layer of", SAMPLES_PER_BATCH, "units.")
+#     if N_POST_DENSE_LAYERS > 1:
+#         for i in range(1,N_POST_DENSE_LAYERS):
+#                 n_filts = i*N_POST_DENSE_FILTERS
+#                 print("Will create 1 Post-Dense layer of", n_filts, "filters.")
+#     else:
+#         print("Will create 1 Post-Dense layer of", N_UNITS*N_TIMESTEPS//20, "filters.")
 output_samples = N_BATCHES*(N_UNITS*N_TIMESTEPS)
 print("Total # of output samples:", output_samples)
 print("^-"*39 + "^")

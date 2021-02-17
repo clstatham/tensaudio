@@ -33,8 +33,12 @@ def prep_hilb_for_dense(t):
 @tf.function
 def prep_hilb_for_dis(t):
     #z = tf.Variable(np.dstack((tf.squeeze(t[0]), tf.squeeze(t[1]))), trainable=False)
-    hilb = tf.convert_to_tensor(tf.reshape(t, (N_BATCHES, 1, TARGET_LEN_OVERRIDE//N_BATCHES)))
+    hilb = tf.convert_to_tensor(tf.reshape(t, (N_BATCHES, 1, TOTAL_SAMPLES//N_BATCHES)))
     return hilb
+
+@tf.function
+def prep_noise_for_pre_dense(t):
+    return tf.reshape(t, (N_BATCHES, N_TIMESTEPS, 1))
 
 @tf.function
 def flatten_hilb(t):
@@ -58,37 +62,52 @@ class TA_Generator(tf.keras.Model):
 
         if GEN_MODE == 1:
             self.audio_rnns = []
-            self.audio_rnns.append(LSTM(TARGET_LEN_OVERRIDE//N_BATCHES, return_state=True, stateful=True, time_major=False, go_backwards=False, name="f_audio_rnn_0"))
+            self.audio_rnns.append(LSTM(SAMPLES_PER_BATCH, return_state=True, stateful=True, time_major=False, go_backwards=False, name="f_audio_rnn_0"))
             for i in range(N_RNN_LAYERS-1):
-                layer_f = LSTM(TARGET_LEN_OVERRIDE//N_BATCHES, return_state=True, stateful=True, time_major=False, go_backwards=False, name="f_audio_rnn_"+str(i+1))
+                layer_f = LSTM(SAMPLES_PER_BATCH, return_state=True, stateful=True, time_major=False, go_backwards=False, name="f_audio_rnn_"+str(i+1))
                 #layer_b = SimpleRNN(N_UNITS*2, return_state=True, stateful=True, time_major=True, go_backwards=True, name="b_audio_rnn_"+str(l))
                 #self.audio_rnns.append(Bidirectional(layer_f, backward_layer=layer_b, merge_mode='ave'))
                 self.audio_rnns.append(layer_f)
         elif GEN_MODE == 0:
-            self.audio_conv = []
+            self.pre_dense = []
             self.audio_denses = []
-            self.audio_deconv = []
-            print("*-"*39 + "*")
-            v_print("Creating convolution layer with", SAMPLES_PER_BATCH, "filters.")
-            self.audio_conv.append(Conv1D(SAMPLES_PER_BATCH, kernel_size=KERNEL_SIZE, activation=tf.keras.activations.tanh, input_shape=(N_BATCHES, N_TIMESTEPS, N_UNITS), name="audio_conv_0"))
-            for i in range(N_CONV_LAYERS-1):
+            self.post_dense = []
+            v_print("*-"*39 + "*")
+            if USE_REAL_AUDIO:
                 v_print("Creating convolution layer with", SAMPLES_PER_BATCH, "filters.")
-                self.audio_conv.append(Conv1D(SAMPLES_PER_BATCH, kernel_size=KERNEL_SIZE, strides=1, activation=tf.keras.activations.tanh, name="audio_conv_"+str(i)))
+                self.pre_dense.append(Conv1D(SAMPLES_PER_BATCH, kernel_size=KERNEL_SIZE, activation=tf.keras.activations.tanh, input_shape=(N_BATCHES, N_TIMESTEPS, N_UNITS), name="audio_conv_0"))
+                for i in range(N_PRE_DENSE_LAYERS-1):
+                    v_print("Creating convolution layer with", SAMPLES_PER_BATCH, "filters.")
+                    self.pre_dense.append(Conv1D(SAMPLES_PER_BATCH, kernel_size=KERNEL_SIZE, strides=1, activation=tf.keras.activations.tanh, name="audio_pre_dense_conv_"+str(i)))
+            else:
+                # must expand a smaller vector into something we can use!
+                v_print("Creating deconvolution layer with", N_TIMESTEPS, "filters.")
+                self.pre_dense.append(Conv1DTranspose(N_TIMESTEPS, kernel_size=KERNEL_SIZE, activation=tf.keras.activations.tanh, input_shape=(N_BATCHES, N_TIMESTEPS, 1), name="audio_conv_0"))
+                for i in range(1,N_PRE_DENSE_LAYERS):
+                    n_filts = i*N_PRE_DENSE_FILTERS
+                    v_print("Creating deconvolution layer with", n_filts, "filters.")
+                    self.pre_dense.append(Conv1DTranspose(n_filts, kernel_size=KERNEL_SIZE, strides=1, padding='same', name="audio_pre_dense_conv1dt_"+str(i-1)))
             for i in range(N_DENSE_LAYERS-1):
-                v_print("Creating dense layer with", N_TIMESTEPS, "units.")
-                self.audio_denses.append(Dense(N_TIMESTEPS, activation=tf.keras.activations.tanh, name="audio_dense_"+str(i)))
+                v_print("Creating dense layer with", SAMPLES_PER_BATCH, "units.")
+                self.audio_denses.append(Dense(SAMPLES_PER_BATCH, activation=tf.keras.activations.tanh, name="audio_dense_"+str(i)))
             v_print("Creating dense layer with", SAMPLES_PER_BATCH, "units.")
             self.audio_denses.append(Dense(SAMPLES_PER_BATCH, activation=tf.keras.activations.tanh, name="audio_dense_"+str(N_DENSE_LAYERS)))
-            for i in range(1,N_DECONV_LAYERS):
-                n_filts = i*N_DECONV_FILTERS
+            for i in range(1,N_POST_DENSE_LAYERS):
+                n_filts = i*N_POST_DENSE_FILTERS
                 v_print("Creating deconvolution layer with", n_filts, "filters.")
-                self.audio_deconv.append(Conv1DTranspose(n_filts, kernel_size=KERNEL_SIZE, strides=1, padding='same', name="audio_conv1dt_"+str(i-1)))
-            #TODO: figure out wtf this magic number 20 is
-            v_print("Creating deconvolution layer with", N_UNITS*N_TIMESTEPS//20, "filters.")
-            self.audio_deconv.append(Conv1DTranspose(N_UNITS*N_TIMESTEPS//20, kernel_size=KERNEL_SIZE, strides=1, padding='same', name="audio_conv1dt_"+str(N_DECONV_LAYERS-1)))
-            print("*-"*39 + "*")
+                self.post_dense.append(Conv1DTranspose(n_filts, kernel_size=KERNEL_SIZE, strides=1, padding='same', name="audio_conv1dt_"+str(i-1)))
+            if USE_REAL_AUDIO:
+                v_print("Creating deconvolution layer with", N_UNITS*N_TIMESTEPS, "filters.")
+                self.post_dense.append(Conv1DTranspose(N_UNITS*N_TIMESTEPS, kernel_size=KERNEL_SIZE, strides=1, padding='same', name="audio_conv1dt_"+str(N_POST_DENSE_LAYERS-1)))
+            else:
+                v_print("Creating deconvolution layer with", N_UNITS*N_TIMESTEPS, "filters.")
+                self.post_dense.append(Conv1DTranspose(N_UNITS*N_TIMESTEPS, kernel_size=KERNEL_SIZE, strides=1, padding='same', name="audio_conv1dt_"+str(N_POST_DENSE_LAYERS-1)))
+            #TODO: figure out wtf this magic number is
+            v_print("Creating convolution layer with", SAMPLES_PER_BATCH, "filters.")
+            self.post_dense.append(Conv1D(SAMPLES_PER_BATCH, kernel_size=KERNEL_SIZE, strides=1, padding='same', name="audio_conv1d_"+str(N_POST_DENSE_LAYERS)))
+            v_print("*-"*39 + "*")
         
-        self.optimizer = tf.keras.optimizers.SGD(GENERATOR_LR)
+        self.optimizer = tf.keras.optimizers.Adam(GENERATOR_LR)
         self.ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=self.optimizer, net=self)
         self.manager = tf.train.CheckpointManager(self.ckpt, os.path.join(MODEL_DIR, "gen_ckpts"), max_to_keep=1)
 
@@ -100,7 +119,8 @@ class TA_Generator(tf.keras.Model):
    
     @tf.function
     def loss(self, op):
-        return tf.keras.losses.BinaryCrossentropy(from_logits=True)(tf.zeros_like(op), op)
+        #return tf.keras.losses.BinaryCrossentropy(from_logits=True)(tf.zeros_like(op), op)
+        return tf.keras.losses.mean_absolute_error(tf.zeros_like(op), op)
     
     def gen_rnn(self, inputs, training=False):
         assert(GEN_MODE == 1)
@@ -141,23 +161,29 @@ class TA_Generator(tf.keras.Model):
         #audio = my_audioert(inputs)
         #audio = audio_tensor(x[0], x[1])
         audio = inputs
+        orig_shape = audio.shape
         
-        audio = prep_audio_for_batch_operation(audio)
+        if USE_REAL_AUDIO:
+            audio = prep_audio_for_batch_operation(audio)
+        else:
+            audio = prep_noise_for_pre_dense(audio)
         v_print("|} Ready for launch! Going to the net now, wheeee!")
-        for i in range(N_CONV_LAYERS):
-            audio = self.audio_conv[i](audio)
-            v_print("|}} Convolution layer", i+1, "done.")
+        for i in range(N_PRE_DENSE_LAYERS):
+            audio = self.pre_dense[i](audio)
+            v_print("|}} Pre-Dense layer", i+1, "done.")
         for i in range(N_DENSE_LAYERS):
             audio = self.audio_denses[i](audio)
             v_print("|}} Dense layer", i+1, "done.")
-        for i in range(N_DECONV_LAYERS):
-            audio = self.audio_deconv[i](audio)
-            v_print("|}} Deconvolution layer", i+1, "done.")
+        for i in range(N_POST_DENSE_LAYERS):
+            audio = self.post_dense[i](audio)
+            v_print("|}} Post-Dense layer", i+1, "done.")
         v_print("|} Whew... Made it out of the net alive!")
         
         audio = tf.squeeze(audio)
+        audio = audio[:, -1, :] # the last timestep
 
         audio = flatten_audio(audio)
+        assert(audio.shape[0] == TOTAL_SAMPLES)
         return audio
 
     @tf.function
