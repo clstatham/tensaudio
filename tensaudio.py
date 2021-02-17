@@ -1,34 +1,24 @@
-import six
+import collections
 import os
 import time
 from datetime import datetime
-import collections
+
+import librosa
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.io.wavfile
+import six
+import soundfile
 import tensorflow as tf
-from tensorflow import keras
 import tensorflow.keras.backend as K
+from tensorflow import keras
+
+from discriminator import DPAM_Discriminator
+from generator import Hilbert_Generator
+from global_constants import *
 from helper import *
 from hilbert import *
 from network_model import *
-from discriminator import DPAM_Discriminator
-from generator import Hilbert_Generator
-
-import tensorflow.python.framework.ops as ops
-import tensorflow.python.framework.dtypes as _dtypes
-import tensorflow.python.ops as pyops
-from tensorflow.python.ops import gen_cudnn_rnn_ops
-import tensorflow.python.eager.execute as _execute
-import tensorflow.python.eager.context as _context
-
-from IPython.display import Audio
-import matplotlib.pyplot as plt
-import numpy as np
-import librosa
-import librosa.display
-import soundfile
-import scipy.io.wavfile
-import pydub
-
-from global_constants import *
 
 physical_devices = tf.config.list_physical_devices('GPU') 
 tf.config.experimental.set_memory_growth(physical_devices[0], True)
@@ -40,6 +30,9 @@ np.random.seed(int(round(time.time())))
 
 total_amps = []
 total_phases = []
+
+total_gen_losses = []
+total_dis_losses = []
 
 def record_amp_phase(amp, phase):
     # total_amps.append(amp)
@@ -101,13 +94,6 @@ def open_truncate_pad(name):
         ret.append((f.read(), f.samplerate))
     return ret
 
-print("Opening examples...")
-EXAMPLE_FILES = open_truncate_pad(EXAMPLES_DIR)
-print("Opening example results...")
-EXAMPLE_RESULT_FILES = open_truncate_pad(EXAMPLE_RESULTS_DIR)
-print("Opening inputs...")
-INPUT_FILES = open_truncate_pad(INPUTS_DIR)
-
 global frick
 def iterate_and_resample(files):
     arr = []
@@ -121,18 +107,6 @@ def iterate_and_resample(files):
 
         arr.append(a.tolist())
     return arr
-
-print("Resampling, stand by...")
-
-EXAMPLE_ARRAYS = iterate_and_resample(EXAMPLE_FILES)
-INPUT_ARRAYS = iterate_and_resample(INPUT_FILES)
-EXAMPLE_RESULT_ARRAYS = iterate_and_resample(EXAMPLE_RESULT_FILES)
-
-print("Created", len(EXAMPLE_ARRAYS), "Example Arrays and", len(EXAMPLE_RESULT_ARRAYS), "Example Result Arrays.")
-
-EXAMPLE_RESULTS = EXAMPLE_RESULT_ARRAYS
-EXAMPLES = EXAMPLE_ARRAYS
-INPUTS = INPUT_ARRAYS
 
 
 def select_input(idx):
@@ -182,8 +156,6 @@ def get_random_example_result():
 # scaled1 = np.int16(y/np.max(np.abs(y)) * 32767)
 # soundfile.write('test.wav', scaled1, SAMPLE_RATE, SUBTYPE)
 
-print("We have", len(INPUTS), "inputs in the folder.")
-
 
 
 class OneStep():
@@ -208,9 +180,6 @@ def create_input(i, dirname):
             scaled1 = np.int16(y/np.max(np.abs(y)) * 32767)
             soundfile.write(dirname+'/example_result_'+str(i)+'_'+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav', scaled1, SAMPLE_RATE, SUBTYPE)
         return x, y
-
-total_gen_losses = []
-total_dis_losses = []
 
 @tf.function
 def train_on_random(i, dirname):
@@ -290,6 +259,19 @@ def train_until_interrupt():
     print("="*80)
     return i
 
+print("Opening examples...")
+EXAMPLE_FILES = open_truncate_pad(EXAMPLES_DIR)
+print("Opening example results...")
+EXAMPLE_RESULT_FILES = open_truncate_pad(EXAMPLE_RESULTS_DIR)
+print("Opening inputs...")
+INPUT_FILES = open_truncate_pad(INPUTS_DIR)
+print("We have", len(INPUT_FILES), "inputs in the folder.")
+
+print("Resampling, stand by...")
+EXAMPLES = iterate_and_resample(EXAMPLE_FILES)
+INPUTS = iterate_and_resample(INPUT_FILES)
+EXAMPLE_RESULTS = iterate_and_resample(EXAMPLE_RESULT_FILES)
+print("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
 strategy = tf.distribute.MirroredStrategy()
 gen = Hilbert_Generator()
