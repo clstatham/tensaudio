@@ -186,34 +186,35 @@ def train_on_random(i, dirname):
     _, y = create_input(i, dirname)
     _, z = create_input(i, None)
     noise = tf.random.normal([TARGET_LEN_OVERRIDE])
-    print("Passing training data to models.")
+    v_print("Passing training data to models.")
     begin_time = time.time()
     with tf.GradientTape() as gen_tape, tf.GradientTape() as dis_tape:
-        print("| Generating...")
+        v_print("| Generating...")
         g = gen(noise, training=True)
         record_amp_phase(g[0], g[1])
-        print("| Discriminating...")
+        v_print("| Discriminating...")
         g = invert_hilb_tensor(g)
         real_o = dis(z, y)
         fake_o = dis(z, g)
-        print("| Calculating Loss...")
+        v_print("| Calculating Loss...")
         gen_loss = gen.loss(fake_o)
         dis_loss = dis.loss(real_o, fake_o)[0]
-        print("|] Gen Loss:", float(gen_loss))
-        print("|] Dis Loss:", float(dis_loss))
+        v_print("|] Gen Loss:", float(gen_loss))
+        v_print("|] Dis Loss:", float(dis_loss))
         total_gen_losses.append(gen_loss)
         total_dis_losses.append(dis_loss)
-    print("| Applying gradients...")
+    v_print("| Applying gradients...")
     gen_grads = gen_tape.gradient(gen_loss, gen.trainable_weights)
     dis_grads = dis_tape.gradient(dis_loss, dis.trainable_weights)
     gen.optimizer.apply_gradients(zip(gen_grads, gen.trainable_weights))
     dis.optimizer.apply_gradients(zip(dis_grads, dis.trainable_weights))
-    if i % SAVE_MODEL_EVERY_ITERS == 0:
-        print("|> Saving checkpoints for models.")
-        gen.manager.save(i)
-        dis.manager.save(i)
     time_diff = time.time() - begin_time
     print("Models successfully trained in", str(round(time_diff, ndigits=2)), "seconds.")
+    if i % SAVE_MODEL_EVERY_ITERS == 0:
+        print("Saving checkpoints for models...")
+        gen.manager.save(i)
+        dis.manager.save(i)
+    
 
     return g
 
@@ -230,7 +231,7 @@ def train_until_interrupt():
     print()
     while True:
         try:
-            print("*"*40)
+            v_print("*"*40)
             print("Initiating iteration #", i)
             train_on_random(i, dirname)
             if i % SAVE_EVERY_ITERS == 0:
@@ -259,19 +260,19 @@ def train_until_interrupt():
     print("="*80)
     return i
 
-print("Opening examples...")
+v_print("Opening examples...")
 EXAMPLE_FILES = open_truncate_pad(EXAMPLES_DIR)
-print("Opening example results...")
+v_print("Opening example results...")
 EXAMPLE_RESULT_FILES = open_truncate_pad(EXAMPLE_RESULTS_DIR)
-print("Opening inputs...")
+v_print("Opening inputs...")
 INPUT_FILES = open_truncate_pad(INPUTS_DIR)
-print("We have", len(INPUT_FILES), "inputs in the folder.")
+v_print("We have", len(INPUT_FILES), "inputs in the folder.")
 
 print("Resampling, stand by...")
 EXAMPLES = iterate_and_resample(EXAMPLE_FILES)
 INPUTS = iterate_and_resample(INPUT_FILES)
 EXAMPLE_RESULTS = iterate_and_resample(EXAMPLE_RESULT_FILES)
-print("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "Example Result Arrays.")
+v_print("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
 strategy = tf.distribute.MirroredStrategy()
 gen = Hilbert_Generator()

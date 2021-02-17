@@ -8,6 +8,11 @@ MODEL_DIR = "D:\\tensaudio_models"
 SAVE_EVERY_ITERS = 250
 SAVE_MODEL_EVERY_ITERS = 250
 
+VERBOSE_OUTPUT = False
+def v_print(*s):
+    if VERBOSE_OUTPUT:
+        print(*s)
+
 SAMPLE_RATE = 8000
 #TARGET_SR = 44100
 #TARGET_SR = 11025

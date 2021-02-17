@@ -88,7 +88,7 @@ class Hilbert_Generator(tf.keras.Model):
             p = tf.expand_dims(p, axis=0)
             return a, p
 
-        if state is None:
+        if self.state is None:
             f_state1 = self.hilb_rnns[0].forward_layer.get_initial_state(hilb)
             b_state1 = self.hilb_rnns[0].backward_layer.get_initial_state(hilb)
         else:
@@ -96,14 +96,14 @@ class Hilbert_Generator(tf.keras.Model):
         f_state1 = f_state1[0]
         b_state1 = b_state1[0]
 
-        print("|} Ready for launch! Going to the net now, wheeee!")
+        v_print("|} Ready for launch! Going to the net now, wheeee!")
 
         hilb, f_state1, b_state1 = self.hilb_rnns[0](hilb, initial_state=(f_state1, b_state1), training=training)
         for i in range(N_LAYERS-1):
             hilb = tf.expand_dims(hilb, axis=0)
             hilb, f_state1, b_state1 = self.hilb_rnns[i+1](hilb, initial_state=(f_state1, b_state1), training=training)
 
-        print("|} Whew... Made it out of the net alive!")
+        v_print("|} Whew... Made it out of the net alive!")
 
         self.state = (f_state1, b_state1)
         hilb = flatten_hilb(hilb)
