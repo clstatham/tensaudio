@@ -11,13 +11,13 @@ import os
 import inspect
 
 class DPAM_Discriminator(tf.keras.Model):
-    def __init__(self, type='scratch', optimiser='adam', learning_rate=0.01, *args, **kwargs):
+    def __init__(self, type='scratch', *args, **kwargs):
         super(DPAM_Discriminator, self).__init__(*args, **kwargs)
         self.type = type
 
         self.loss = tf.keras.losses.mean_absolute_error
 
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=DISCRIMINATOR_LR)
        
         self.ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=self.optimizer, net=self)
         self.manager = tf.train.CheckpointManager(self.ckpt, os.path.join(MODEL_DIR, "dis_ckpts"), max_to_keep=1)
@@ -30,20 +30,18 @@ class DPAM_Discriminator(tf.keras.Model):
     
     def call(self, input1_wav, clean1_wav):
         ## Training Parameters
-        SE_LAYERS = 3 # NUMBER OF INTERNAL LAYERS
+        SE_LAYERS = N_DIS_LAYERS # NUMBER OF INTERNAL LAYERS
         SE_CHANNELS = 64 # NUMBER OF FEATURE CHANNELS PER LAYER
-        SE_LOSS_LAYERS = 3 # NUMBER OF FEATURE LOSS LAYERS
+        SE_LOSS_LAYERS = N_DIS_LAYERS # NUMBER OF FEATURE LOSS LAYERS
         SE_NORM = "NM" # TYPE OF LAYER NORMALIZATION (NM, SBN or None)
         SE_LOSS_TYPE = "FL" # TYPE OF TRAINING LOSS (L1, L2 or FL)
         
         # FEATURE LOSS NETWORK
-        LOSS_LAYERS = 3 # NUMBER OF INTERNAL LAYERS
+        LOSS_LAYERS = N_DIS_LAYERS # NUMBER OF INTERNAL LAYERS
         LOSS_BASE_CHANNELS = 32 # NUMBER OF FEATURE CHANNELS PER LAYER IN FIRT LAYER
         LOSS_BLK_CHANNELS = 5 # NUMBER OF LAYERS BETWEEN CHANNEL NUMBER UPDATES
         LOSS_NORM =  'SBN' # TYPE OF LAYER NORMALIZATION (NM, SBN or None)
 
-        SET_WEIGHT_EPOCH = 10 # NUMBER OF EPOCHS BEFORE FEATURE LOSS BALANCE
-        SAVE_EPOCHS = 10 # NUMBER OF EPOCHS BETWEEN MODEL SAVES
         FILTER_SIZE=3
 
         self.input1_wav = input1_wav
@@ -54,6 +52,8 @@ class DPAM_Discriminator(tf.keras.Model):
         input1_wav = tf.expand_dims(input1_wav, axis=0)
         clean1_wav = tf.expand_dims(clean1_wav, axis=0)
         clean1_wav = tf.expand_dims(clean1_wav, axis=0)
+        input1_wav = prep_audio_for_batch_operation(input1_wav)
+        clean1_wav = prep_audio_for_batch_operation(clean1_wav)
 
         others,loss_sum = featureloss_batch(input1_wav,clean1_wav,keep_prob,loss_layers=SE_LOSS_LAYERS,n_layers=LOSS_LAYERS, norm_type=LOSS_NORM, base_channels=LOSS_BASE_CHANNELS,blk_channels=LOSS_BLK_CHANNELS,ksz=FILTER_SIZE) 
 

@@ -4,6 +4,8 @@ import tensorflow as tf
 import tensorflow.keras
 from sklearn.preprocessing import normalize
 
+from global_constants import *
+
 # LEAKY RELU UNIT
 def lrelu(x):
     return tf.maximum(0.2*x,x)
@@ -292,5 +294,8 @@ def voc_ap(rec, prec, use_07_metric=True):
         ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
     return ap
 
+def prep_audio_for_batch_operation(t):
+  return tf.reshape(t, (N_BATCHES, N_TIMESTEPS, N_UNITS))
+  #return tf.reshape(t, (N_BATCHES, 2, 1))
 def normalize_audio(a):
   return a/np.max(np.abs(a))

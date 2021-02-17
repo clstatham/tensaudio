@@ -20,7 +20,7 @@ from helper import *
 from hilbert import *
 from network_model import *
 
-print(tf.version.VERSION)
+print("TensorFlow version:", tf.version.VERSION)
 
 physical_devices = tf.config.list_physical_devices('GPU') 
 tf.config.experimental.set_memory_growth(physical_devices[0], True)
@@ -42,7 +42,7 @@ def record_amp_phase(amp, phase):
     pass
 def plot_metrics(i, show=False):
     timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
-    dirname = os.path.join("plots", timestamp)
+    dirname = os.path.join(PLOTS_DIR, timestamp)
     # fig1 = plt.figure()
     # fig1.suptitle("Amplitude Envelopes")
     # ax1 = fig1.add_subplot(1, 1, 1, projection='3d', label="Amplitude Envelopes", )
@@ -101,7 +101,7 @@ def iterate_and_resample(files):
     arr = []
     for i in range(len(files)):
         fn = str(i)
-        frick = files[0][0]
+        frick = files[i][0]
         if len(frick.shape) > 1 and frick.shape[1] != 1:
             frick = np.transpose(frick)[0]
         frick = np.asfortranarray(frick)
@@ -116,7 +116,7 @@ def select_input(idx):
     if x.shape[0] < TARGET_LEN_OVERRIDE:
         x = K.concatenate((x, [0]*(TARGET_LEN_OVERRIDE-x.shape[0])))
 
-    x = x[:TARGET_LEN_OVERRIDE]
+    x = x[SLICE_START:TARGET_LEN_OVERRIDE]
     return normalize_audio(x)
 
 def get_example(idx):
@@ -124,22 +124,20 @@ def get_example(idx):
     if x.shape[0] < TARGET_LEN_OVERRIDE:
         x = K.concatenate((x, [0]*(TARGET_LEN_OVERRIDE-x.shape[0])))
 
-    x = x[:TARGET_LEN_OVERRIDE]
+    x = x[SLICE_START:TARGET_LEN_OVERRIDE]
     return normalize_audio(x)
 def get_random_example():
-    y = get_example(np.random.randint(0, len(EXAMPLES)))
-    return y
+    return get_example(np.random.randint(len(EXAMPLES)))
 
 def get_example_result(idx):
     x = tf.cast(EXAMPLE_RESULTS[idx], tf.float32)
     if x.shape[0] < TARGET_LEN_OVERRIDE:
         x = K.concatenate((x, [0]*(TARGET_LEN_OVERRIDE-x.shape[0])))
 
-    x = x[:TARGET_LEN_OVERRIDE]
+    x = x[SLICE_START:TARGET_LEN_OVERRIDE]
     return normalize_audio(x)
 def get_random_example_result():
-    y = get_example_result(np.random.randint(0, len(EXAMPLE_RESULTS)))
-    return y
+    return get_example_result(np.random.randint(len(EXAMPLE_RESULTS)))
 
 # a, p = my_hilbert(select_input(0))
 # fig0 = plt.figure()
@@ -171,16 +169,11 @@ class OneStep():
         return predicted_logits
 
 @tf.function
-def create_input(i, dirname):
+def create_inputs():
         x = get_random_example()
         y = get_random_example_result()
 
         y = spectral_convolution(x, y)
-        
-        # if i % SAVE_EVERY_ITERS == 0 and dirname is not None:
-        #     print("Writing convolved result to disk.")
-        #     scaled1 = np.int16(y/np.max(np.abs(y)) * 32767)
-        #     soundfile.write(dirname+'/example_result_'+str(i)+'_'+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav', scaled1, SAMPLE_RATE, SUBTYPE)
         return x, y
 
 gen_tape = tf.GradientTape(persistent=False)
@@ -188,9 +181,19 @@ dis_tape = tf.GradientTape(persistent=False)
 
 @tf.function
 def train_on_random(i, dirname):
-    x, y = create_input(i, dirname)
-    _, z = create_input(i, None)
-    noise = tf.random.normal([TARGET_LEN_OVERRIDE])
+    x, y = create_inputs()
+    _, z = create_inputs()
+    if not USE_REAL_AUDIO:
+        x = tf.random.normal([TARGET_LEN_OVERRIDE])
+    if i % SAVE_EVERY_ITERS == 0 and dirname is not None:
+        print("Writing training data to disk.")
+        timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
+        scaled1 = np.int16(normalize_audio(x) * 32767)
+        scaled2 = np.int16(normalize_audio(y) * 32767)
+        scaled3 = np.int16(normalize_audio(z) * 32767)
+        soundfile.write(dirname+'/iter'+str(i)+'_x_'+timestamp+'.wav', scaled1, SAMPLE_RATE, SUBTYPE)
+        soundfile.write(dirname+'/iter'+str(i)+'_y_'+timestamp+'.wav', scaled2, SAMPLE_RATE, SUBTYPE)
+        soundfile.write(dirname+'/iter'+str(i)+'_z_'+timestamp+'.wav', scaled3, SAMPLE_RATE, SUBTYPE)
     v_print("Passing training data to models.")
     begin_time = time.time()
     with gen_tape, dis_tape:
@@ -227,7 +230,7 @@ def train_until_interrupt():
     states = None
     i = 0
     timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
-    dirname = os.path.join("training", "training_"+timestamp)
+    dirname = os.path.join(TRAINING_DIR, "training_"+timestamp)
     os.mkdir(dirname)
     print("="*80)
     print("MODEL TRAINING BEGINS AT", timestamp)
