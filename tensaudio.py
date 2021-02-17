@@ -183,14 +183,14 @@ def create_input(i, dirname):
 
 @tf.function
 def train_on_random(i, dirname):
-    _, y = create_input(i, dirname)
+    x, y = create_input(i, dirname)
     _, z = create_input(i, None)
     noise = tf.random.normal([TARGET_LEN_OVERRIDE])
     v_print("Passing training data to models.")
     begin_time = time.time()
     with tf.GradientTape() as gen_tape, tf.GradientTape() as dis_tape:
         v_print("| Generating...")
-        g = gen(noise, training=True)
+        g = gen(x, training=True)
         record_amp_phase(g[0], g[1])
         v_print("| Discriminating...")
         g = invert_hilb_tensor(g)
