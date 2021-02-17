@@ -192,7 +192,7 @@ class OneStep():
         self.generator = generator
 
     def generate_one_step(self, inputs):
-        predicted_logits = self.generator.gen_fn(inputs, mode=tf.estimator.ModeKeys.PREDICT)
+        predicted_logits = self.generator(inputs, training=False)
 
         return invert_hilb_tensor(predicted_logits)
 
@@ -214,14 +214,14 @@ total_dis_losses = []
 
 @tf.function
 def train_on_random(i, dirname):
-    x, y = create_input(i, dirname)
+    _, y = create_input(i, dirname)
     _, z = create_input(i, None)
-    #noise = tf.random.normal([TARGET_LEN_OVERRIDE])
+    noise = tf.random.normal([TARGET_LEN_OVERRIDE])
     print("Passing training data to models.")
     begin_time = time.time()
     with tf.GradientTape() as gen_tape, tf.GradientTape() as dis_tape:
         print("| Generating...")
-        g = gen.gen_fn(x, mode=tf.estimator.ModeKeys.TRAIN)
+        g = gen(noise, training=True)
         record_amp_phase(g[0], g[1])
         print("| Discriminating...")
         g = invert_hilb_tensor(g)

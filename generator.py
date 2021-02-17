@@ -49,25 +49,18 @@ class Hilbert_Generator(tf.keras.Model):
         
         self.optimizer = tf.keras.optimizers.Adam(GENERATOR_LR, 0.5)
         self.ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=self.optimizer, net=self)
-        self.manager = tf.train.CheckpointManager(self.ckpt, os.path.join(MODEL_DIR, "gen_ckpts"), max_to_keep=3)
+        self.manager = tf.train.CheckpointManager(self.ckpt, os.path.join(MODEL_DIR, "gen_ckpts"), max_to_keep=1)
 
         if self.manager.latest_checkpoint:
             self.ckpt.restore(self.manager.latest_checkpoint)
             print("Generator Restored from {}".format(self.manager.latest_checkpoint))
         else:
             print("Generator Initializing from scratch.")
-
    
     def loss(self, op):
         return cross_entropy(tf.ones_like(op), op)
     
-    def gen_fn(self, inputs, mode, weight_decay=2.5e-5):
-        is_training = (mode == tf.estimator.ModeKeys.TRAIN)
-        res, self.state = self.call(inputs, self.state, return_state=True, training=is_training)
-
-        return res
-    
-    def call(self, inputs, state=None, return_state=False, training=False):
+    def gen_fn(self, inputs, training=False):
         x = my_hilbert(inputs)
         hilb = hilb_tensor(x[0], x[1])
         amp, phase = hilb[0], hilb[1]
@@ -99,7 +92,7 @@ class Hilbert_Generator(tf.keras.Model):
             f_state1 = self.hilb_rnns[0].forward_layer.get_initial_state(hilb)
             b_state1 = self.hilb_rnns[0].backward_layer.get_initial_state(hilb)
         else:
-            f_state1, b_state1 = state
+            f_state1, b_state1 = self.state
         f_state1 = f_state1[0]
         b_state1 = b_state1[0]
 
@@ -112,6 +105,10 @@ class Hilbert_Generator(tf.keras.Model):
 
         print("|} Whew... Made it out of the net alive!")
 
+        self.state = (f_state1, b_state1)
         hilb = flatten_hilb(hilb)
 
-        return hilb, (f_state1, b_state1)
+        return hilb
+    
+    def call(self, inputs, training=False):
+        return self.gen_fn(inputs, training)

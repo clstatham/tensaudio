@@ -20,7 +20,7 @@ class DPAM_Discriminator(tf.keras.Model):
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
        
         self.ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=self.optimizer, net=self)
-        self.manager = tf.train.CheckpointManager(self.ckpt, os.path.join(MODEL_DIR, "dis_ckpts"), max_to_keep=3)
+        self.manager = tf.train.CheckpointManager(self.ckpt, os.path.join(MODEL_DIR, "dis_ckpts"), max_to_keep=1)
         
         if self.manager.latest_checkpoint:
             self.ckpt.restore(self.manager.latest_checkpoint)
