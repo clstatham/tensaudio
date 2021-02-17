@@ -20,6 +20,8 @@ from helper import *
 from hilbert import *
 from network_model import *
 
+print(tf.version.VERSION)
+
 physical_devices = tf.config.list_physical_devices('GPU') 
 tf.config.experimental.set_memory_growth(physical_devices[0], True)
 tf.config.run_functions_eagerly(True)
@@ -115,7 +117,7 @@ def select_input(idx):
         x = K.concatenate((x, [0]*(TARGET_LEN_OVERRIDE-x.shape[0])))
 
     x = x[:TARGET_LEN_OVERRIDE]
-    return x
+    return normalize_audio(x)
 
 def get_example(idx):
     x = tf.cast(EXAMPLES[idx], tf.float32)
@@ -123,7 +125,7 @@ def get_example(idx):
         x = K.concatenate((x, [0]*(TARGET_LEN_OVERRIDE-x.shape[0])))
 
     x = x[:TARGET_LEN_OVERRIDE]
-    return x
+    return normalize_audio(x)
 def get_random_example():
     y = get_example(np.random.randint(0, len(EXAMPLES)))
     return y
@@ -134,7 +136,7 @@ def get_example_result(idx):
         x = K.concatenate((x, [0]*(TARGET_LEN_OVERRIDE-x.shape[0])))
 
     x = x[:TARGET_LEN_OVERRIDE]
-    return x
+    return normalize_audio(x)
 def get_random_example_result():
     y = get_example_result(np.random.randint(0, len(EXAMPLE_RESULTS)))
     return y
@@ -241,7 +243,7 @@ def train_until_interrupt():
                 begin_time = time.time()
                 plot_metrics(i, show=False)
                 out1 = onestep.generate_one_step(select_input(0))
-                scaled1 = np.int16(out1/np.max(np.abs(out1)) * 32767)
+                scaled1 = np.int16(normalize_audio(out1) * 32767)
                 soundfile.write(dirname+'/progress'+str(i)+"_"+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav', scaled1, SAMPLE_RATE, SUBTYPE)
                 time_diff = time.time() - begin_time
                 print("Progress update generated in", str(round(time_diff, ndigits=2)), "seconds.")
@@ -276,12 +278,10 @@ INPUTS = iterate_and_resample(INPUT_FILES)
 EXAMPLE_RESULTS = iterate_and_resample(EXAMPLE_RESULT_FILES)
 v_print("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
-strategy = tf.distribute.MirroredStrategy()
-with strategy.scope(), gen_tape, dis_tape:
-    gen = TA_Generator()
-    dis = DPAM_Discriminator()
-    gen.compile(optimizer=gen.optimizer, loss=gen.loss)
-    dis.compile(optimizer=dis.optimizer, loss=dis.loss)
+gen = TA_Generator()
+dis = DPAM_Discriminator()
+gen.compile(optimizer=gen.optimizer, loss=gen.loss)
+dis.compile(optimizer=dis.optimizer, loss=dis.loss)
 
 onestep = OneStep(gen)
 
@@ -293,7 +293,7 @@ if __name__ == "__main__":
     data = onestep.generate_one_step(inp)
     print("Done!")
 
-    scaled1 = np.int16(data/np.max(np.abs(data)) * 32767)
+    scaled1 = np.int16(normalize_audio(data) * 32767)
     soundfile.write('out1.wav', scaled1, SAMPLE_RATE, SUBTYPE)
 
     plot_metrics(i, show=True)

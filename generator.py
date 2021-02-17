@@ -41,6 +41,8 @@ def flatten_hilb(t):
     tmp = tf.Variable(K.flatten(t), trainable=False)
     return hilb_tensor(tmp[::2], tmp[1::2])
 
+def prep_audio_for_rnn(t):
+    return tf.reshape(t, (N_BATCHES, N_TIMESTEPS, N_UNITS))
 def prep_audio_for_batch_operation(t):
     return tf.reshape(t, (N_BATCHES, N_TIMESTEPS, N_UNITS))
 
@@ -49,30 +51,40 @@ class TA_Generator(tf.keras.Model):
         super(TA_Generator, self).__init__(**kwargs)
         self.rnn_state = None
 
-        self.N_DECONV_FILTERS = (TARGET_LEN_OVERRIDE // (N_DECONV_LAYERS+1))
+        self.N_DECONV_FILTERS = (TARGET_LEN_OVERRIDE // (2*(N_DECONV_LAYERS+1)))
 
         if GEN_MODE == 1:
             self.audio_rnns = []
-            self.audio_rnns.append(LSTM(N_UNITS, return_state=True, stateful=True, time_major=True, go_backwards=False, name="f_audio_rnn_0", input_shape=(N_BATCHES, N_TIMESTEPS, N_UNITS)))
-            for l in range(N_LAYERS-1):
-                layer_f = LSTM(N_UNITS, return_state=True, stateful=True, time_major=True, go_backwards=False, name="f_audio_rnn_"+str(l+1))
+            self.audio_rnns.append(LSTM(TARGET_LEN_OVERRIDE//N_BATCHES, return_state=True, stateful=True, time_major=False, go_backwards=False, name="f_audio_rnn_0"))
+            for l in range(N_RNN_LAYERS-1):
+                layer_f = LSTM(TARGET_LEN_OVERRIDE//N_BATCHES, return_state=True, stateful=True, time_major=False, go_backwards=False, name="f_audio_rnn_"+str(l+1))
                 #layer_b = SimpleRNN(N_UNITS*2, return_state=True, stateful=True, time_major=True, go_backwards=True, name="b_audio_rnn_"+str(l))
                 #self.audio_rnns.append(Bidirectional(layer_f, backward_layer=layer_b, merge_mode='ave'))
                 self.audio_rnns.append(layer_f)
         elif GEN_MODE == 0:
+            self.audio_conv = []
             self.audio_denses = []
             self.audio_deconv = []
-            self.audio_denses.append(Dense(N_UNITS//N_DENSE_LAYERS, activation=tf.keras.activations.tanh, input_shape=(N_BATCHES, N_TIMESTEPS, N_UNITS), name="audio_dense_0"))
+            print("*-"*39 + "*")
+            v_print("Creating convolution layer with", TARGET_LEN_OVERRIDE//N_BATCHES, "filters.")
+            self.audio_conv.append(Conv1D(TARGET_LEN_OVERRIDE//N_BATCHES, kernel_size=KERNEL_SIZE, activation=tf.keras.activations.tanh, input_shape=(N_BATCHES, N_TIMESTEPS, N_UNITS), name="audio_conv_0"))
+            for l in range(N_CONV_LAYERS-1):
+                v_print("Creating convolution layer with", N_UNITS*N_TIMESTEPS, "filters.")
+                self.audio_conv.append(Conv1D(N_UNITS*N_TIMESTEPS, kernel_size=KERNEL_SIZE, strides=1, activation=tf.keras.activations.tanh, name="audio_conv_"+str(l)))
             for l in range(N_DENSE_LAYERS-1):
-                self.audio_denses.append(Dense(N_UNITS, activation=tf.keras.activations.tanh, name="audio_dense_"+str(l)))
-            for i in range(1, N_DECONV_LAYERS):
-                n_filts = i*self.N_DECONV_FILTERS
+                v_print("Creating dense layer with", N_TIMESTEPS, "units.")
+                self.audio_denses.append(Dense(N_TIMESTEPS, activation=tf.keras.activations.tanh, name="audio_dense_"+str(l)))
+            v_print("Creating dense layer with", TARGET_LEN_OVERRIDE//(N_BATCHES*20), "units.")
+            self.audio_denses.append(Dense(TARGET_LEN_OVERRIDE//(N_BATCHES*20), activation=tf.keras.activations.tanh, name="audio_dense_"+str(N_DENSE_LAYERS)))
+            for l in range(1,N_DECONV_LAYERS):
+                n_filts = l*self.N_DECONV_FILTERS
                 v_print("Creating deconvolution layer with", n_filts, "filters.")
-                self.audio_deconv.append(Conv1DTranspose(n_filts, kernel_size=1, strides=1, padding='same', name="audio_conv1dt_"+str(i-1)))
-            v_print("Creating deconvolution layer with", N_UNITS, "filters.")
-            self.audio_deconv.append(Conv1DTranspose(N_UNITS, kernel_size=1, strides=1, padding='same', name="audio_conv1dt_"+str(N_DECONV_LAYERS-1)))
+                self.audio_deconv.append(Conv1DTranspose(n_filts, kernel_size=KERNEL_SIZE, strides=1, padding='same', name="audio_conv1dt_"+str(l-1)))
+            v_print("Creating deconvolution layer with", N_UNITS*2, "filters.")
+            self.audio_deconv.append(Conv1DTranspose(N_UNITS*2, kernel_size=KERNEL_SIZE, strides=1, padding='same', name="audio_conv1dt_"+str(N_DECONV_LAYERS-1)))
             #self.audio_denses.append(Dense(TARGET_LEN_OVERRIDE, activation=tf.keras.activations.tanh))
-            
+            print("*-"*39 + "*")
+        
         self.optimizer = tf.keras.optimizers.Adam(GENERATOR_LR, 0.5)
         self.ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=self.optimizer, net=self)
         self.manager = tf.train.CheckpointManager(self.ckpt, os.path.join(MODEL_DIR, "gen_ckpts"), max_to_keep=1)
@@ -90,6 +102,8 @@ class TA_Generator(tf.keras.Model):
     def gen_rnn(self, inputs, training=False):
         assert(GEN_MODE == 1)
 
+        audio = inputs
+
         # amp, phase = audio[0], audio[1]
 
         # amp = tf.cast(amp, tf.float32)
@@ -106,31 +120,33 @@ class TA_Generator(tf.keras.Model):
         # phase_dim2 = phase.shape[1]
         # phase_dim3 = phase.shape[2]
 
-        audio = hilb_tensor(amp, phase)
+        #audio = hilb_tensor(amp, phase)
         audio = prep_audio_for_batch_operation(audio)
         #audio.set_shape((2*N_BATCHES, N_TIMESTEPS, N_UNITS//2))
 
         if self.rnn_state is None:
-            f_state1 = self.audio_rnns[0].get_initial_state(audio)
+            f_state1, f_state2 = self.audio_rnns[0].get_initial_state(audio)
+            #f_state1 = None
             #b_state1 = self.audio_rnns[0].backward_layer.get_initial_state(audio)
+            #f_state1 = f_state1[0]
         else:
             #f_state1, b_state1 = self.rnn_state
             f_state1 = self.rnn_state
-        f_state1 = f_state1[0]
         #b_state1 = b_state1[0]
 
         v_print("|} Ready for launch! Going to the net now, wheeee!")
 
-        audio, f_state1 = self.audio_rnns[0](audio, initial_state=f_state1, training=training)
+        audio, f_state1, f_state2 = self.audio_rnns[0](audio, initial_state=(f_state1, f_state2), training=training)
         v_print("|} Layer 1 done.")
-        for i in range(N_LAYERS-1):
-            audio = tf.expand_dims(audio, axis=0)
-            audio, f_state1 = self.audio_rnns[i+1](audio, initial_state=f_state1, training=training)
-            v_print("|} Layer", i+2, "done.")
+        for i in range(N_RNN_LAYERS-1):
+            audio = prep_audio_for_batch_operation(audio)
+            #audio = tf.expand_dims(audio, axis=0)
+            audio, f_state1, f_state2 = self.audio_rnns[i+1](audio, initial_state=(f_state1, f_state2), training=training)
+            v_print("|}} Layer", i+2, "done.")
 
         v_print("|} Whew... Made it out of the net alive!")
 
-        self.rnn_state = f_state1
+        #self.rnn_state = (f_state1, f_state2)
         audio = K.flatten(audio)
         return audio
 
@@ -143,12 +159,17 @@ class TA_Generator(tf.keras.Model):
         
         audio = prep_audio_for_batch_operation(audio)
         v_print("|} Ready for launch! Going to the net now, wheeee!")
+        for i in range(N_CONV_LAYERS):
+            audio = self.audio_conv[i](audio)
+            v_print("|}} Convolution layer", i+1, "done.")
         for i in range(N_DENSE_LAYERS):
             audio = self.audio_denses[i](audio)
-        audio = prep_audio_for_batch_operation(audio)
-        v_print("|} Deconvolving...")
+            v_print("|}} Dense layer", i+1, "done.")
         for i in range(N_DECONV_LAYERS):
+            #audio = tf.squeeze(audio)
+            #audio = prep_audio_for_batch_operation(audio)
             audio = self.audio_deconv[i](audio)
+            v_print("|}} Deconvolution layer", i+1, "done.")
         v_print("|} Whew... Made it out of the net alive!")
         
         audio = tf.squeeze(audio)

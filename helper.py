@@ -292,3 +292,5 @@ def voc_ap(rec, prec, use_07_metric=True):
         ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
     return ap
 
+def normalize_audio(a):
+  return a/np.max(np.abs(a))
