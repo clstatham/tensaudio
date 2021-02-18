@@ -23,7 +23,7 @@ INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example re
 
 GEN_MODE = 2            # 0 = RNN/Hilbert mode
                         # 1 = RNN/Audio mode
-                        # 2 = Conv/Hilbert mode
+                        # 2 = Conv/Hilbert mode (only this one works atm)
                         # 3 = Conv/Audio mode
 USE_REAL_AUDIO = False
 SAMPLE_RATE = 16000
