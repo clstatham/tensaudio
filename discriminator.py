@@ -53,25 +53,15 @@ class DPAM_Discriminator(nn.Module):
         i = 1
         for layer in self.ln_layers:
             n_channels = self.layer_channels_by_index(i)
-            #out = prep_data_for_batch_operation(out, N_BATCHES, n_channels, None)
             out = layer(out)
             i += 1
         return out
 
     def featureloss_batch(self, target, current):
         feat_current = self.call_ln(current)
-
         feat_target = self.call_ln(target)
-        
-        loss_vec = []
-        
-        channels = np.asarray([self.layer_channels_by_index(i) for i in range(len(self.ln_layers))])
-        
-        for i in range(len(self.ln_layers)):
-            loss_result=l2_loss(feat_target[i], feat_current[i])
-            loss_vec.append(loss_result)
-        
-        return loss_vec
+        loss_result=F.l1_loss(input=feat_current, target=feat_target)
+        return loss_result
 
     def forward(self, input1_wav, clean1_wav):
         self.input1_wav = input1_wav
@@ -88,7 +78,7 @@ class DPAM_Discriminator(nn.Module):
 
         others = self.featureloss_batch(input1_wav,clean1_wav)
 
-        res=torch.sum(torch.tensor(others))
+        res=torch.sum(torch.tensor(others).cuda())
         res=torch.log(res)
         
         res=torch.sigmoid(res)

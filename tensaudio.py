@@ -10,7 +10,6 @@ import scipy.io.wavfile
 import six
 import soundfile
 import torch
-import torchaudio
 
 from discriminator import DPAM_Discriminator
 from generator import TA_Generator
@@ -69,6 +68,8 @@ def plot_metrics(i, show=False):
     # fig2.savefig(os.path.join(dirname, filename2))
     fig3.savefig(os.path.join(dirname, filename3))
     fig4.savefig(os.path.join(dirname, filename4))
+
+    plt.close()
 
     # if show:
     #     fig1.show()
@@ -163,11 +164,11 @@ def create_inputs():
         y = get_random_example_result()
 
         if INPUT_MODE == 'conv':
-            y = torch.from_numpy(spectral_convolution(x, y))
+            y = torch.from_numpy(spectral_convolution(x, y)).cuda()
         return x, y
 
 def generate_input_noise():
-    return torch.rand([TOTAL_SAMPLES])
+    return torch.rand([TOTAL_SAMPLES]).cuda()
 
 gen_loss, dis_loss = None, None
 
@@ -194,15 +195,6 @@ def train_on_random(i, dirname):
     _, z = create_inputs()
     if not USE_REAL_AUDIO:
         x = generate_input_noise()
-    if SAVE_EVERY_ITERS > 0 and i % SAVE_EVERY_ITERS == 0 and dirname is not None:
-        print("Writing training data to disk.")
-        timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
-        scaled1 = np.int16(normalize_audio(x.cpu()) * 32767)
-        scaled2 = np.int16(normalize_audio(y.cpu()) * 32767)
-        scaled3 = np.int16(normalize_audio(z.cpu()) * 32767)
-        soundfile.write(dirname+'/iter'+str(i)+'_x_'+timestamp+'.wav', scaled1, SAMPLE_RATE, SUBTYPE)
-        soundfile.write(dirname+'/iter'+str(i)+'_y_'+timestamp+'.wav', scaled2, SAMPLE_RATE, SUBTYPE)
-        soundfile.write(dirname+'/iter'+str(i)+'_z_'+timestamp+'.wav', scaled3, SAMPLE_RATE, SUBTYPE)
     v_print("Passing training data to models.")
     begin_time = time.time()
     gen_optim.zero_grad()
@@ -223,28 +215,40 @@ def train_on_random(i, dirname):
     #     torch.save(gen, os.path.join(MODEL_DIR, "gen_ckpts"))
     #     torch.save(dis, os.path.join(MODEL_DIR, "dis_ckpts"))
     
+    if SAVE_EVERY_ITERS > 0 and i % SAVE_EVERY_ITERS == 0 and dirname is not None:
+        print("Writing training data to disk.")
+        timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
+        scaled1 = np.int16(normalize_audio(x.cpu()) * 32767)
+        scaled2 = np.int16(normalize_audio(y.cpu()) * 32767)
+        scaled3 = np.int16(normalize_audio(z.cpu()) * 32767)
+        soundfile.write(dirname+'/iter'+str(i)+'_x_'+timestamp+'.wav', scaled1, SAMPLE_RATE, SUBTYPE)
+        soundfile.write(dirname+'/iter'+str(i)+'_y_'+timestamp+'.wav', scaled2, SAMPLE_RATE, SUBTYPE)
+        soundfile.write(dirname+'/iter'+str(i)+'_z_'+timestamp+'.wav', scaled3, SAMPLE_RATE, SUBTYPE)
+
     return g
 
 
-def train_until_interrupt():
+def train_until_interrupt(save_plots=False):
     states = None
     i = 0
     timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
     dirname = os.path.join(TRAINING_DIR, "training_"+timestamp)
-    os.mkdir(dirname)
     print("="*80)
     print("MODEL TRAINING BEGINS AT", timestamp)
     print("="*80)
     print()
-    while True:
+    while i+1 <= MAX_ITERS:
         try:
+            if i == 0:
+                os.mkdir(dirname)
             v_print("*"*40)
             print("Initiating iteration #", i)
             train_on_random(i, dirname)
             if SAVE_EVERY_ITERS > 0 and i % SAVE_EVERY_ITERS == 0:
                 print("Generating progress update...")
                 begin_time = time.time()
-                plot_metrics(i, show=False)
+                if save_plots:
+                    plot_metrics(i, show=False)
                 if USE_REAL_AUDIO:
                     out1 = onestep.generate_one_step(select_input(0))
                 else:
@@ -285,8 +289,8 @@ v_print("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "E
 
 gen = TA_Generator().cuda()
 dis = DPAM_Discriminator().cuda()
-gen_optim = torch.optim.SGD(gen.parameters(), lr=GENERATOR_LR, momentum=0.9)
-dis_optim = torch.optim.SGD(dis.parameters(), lr=DISCRIMINATOR_LR, momentum=0.9)
+gen_optim = torch.optim.SGD(gen.parameters(), lr=GENERATOR_LR, momentum=GENERATOR_MOMENTUM)
+dis_optim = torch.optim.SGD(dis.parameters(), lr=DISCRIMINATOR_LR, momentum=DISCRIMINATOR_MOMENTUM)
 
 onestep = OneStep(gen)
 

@@ -1,7 +1,6 @@
 import six
 import numpy as np
 import torch
-import torchaudio
 import scipy.signal
 
 from global_constants import *

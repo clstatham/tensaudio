@@ -52,34 +52,55 @@ class TA_Generator(nn.Module):
         return self.loss(input=op, target=torch.tensor(0.).cuda())
     
     def create_dense_net(self, hilb_mode=False):
-        self.pre_dense = []
-        self.denses = []
-        self.post_dense = []
+        self.preprocess_layers = []
+        self.process_layers = []
+        self.postprocess_layers = []
+        self.n_hidden_layers = 64
+
         v_print("*-"*39 + "*")
         
-        for i in range(N_PRE_DENSE_LAYERS):
-            v_print("Creating convolution layer", N_CHANNELS, ">", N_CHANNELS)
-            #self.pre_dense.append(nn.Tanh())
-            self.pre_dense.append(nn.Conv1d(N_CHANNELS, N_CHANNELS, kernel_size=KERNEL_SIZE, stride=1).cuda())
+        self.n_process_units = TOTAL_SAMPLES
+        self.offset = N_PREPROCESS_LAYERS+3
+        v_print("Creating convolution layer", N_CHANNELS, ">", self.offset+N_CHANNELS*(N_PREPROCESS_LAYERS))
+        self.preprocess_layers.append(nn.Conv1d(N_CHANNELS, self.offset+N_CHANNELS*(N_PREPROCESS_LAYERS), kernel_size=KERNEL_SIZE, stride=1).cuda())
+        n_inputs = 0
+        n_outputs = 0
+        ksz = KERNEL_SIZE
+        stride = 0
+        total_lost_dims = 0
+        for i in range(N_PREPROCESS_LAYERS):
+            n_inputs = 1+self.offset+N_CHANNELS*(N_PREPROCESS_LAYERS-i)
+            n_outputs = self.offset+N_CHANNELS*(N_PREPROCESS_LAYERS-i)
+            #self.n_process_units = n_outputs
+            stride = ksz * (i+1)
+            total_lost_dims += (n_outputs * ksz * stride)
+            v_print("Creating convolution layer", n_inputs, ">", n_outputs, "ksz =", ksz, "stride =", stride)
+            self.preprocess_layers.append(nn.Conv1d(n_inputs, n_outputs, kernel_size=ksz, stride=stride).cuda())
+        # stride = ksz * N_PREPROCESS_LAYERS
+        # v_print("Creating convolution layer", 1, ">", 1, "ksz =", ksz, "stride =", stride)
+        # self.preprocess_layers.append(nn.Conv1d(1, 1, kernel_size=ksz, groups=1, stride=stride).cuda())
 
-        for i in range(N_DENSE_LAYERS):
-            v_print("Creating linear layer", N_TIMESTEPS_PER_KERNEL, ">", N_TIMESTEPS_PER_KERNEL)
-            #self.denses.append(nn.Tanh())
-            self.denses.append(nn.Linear(N_TIMESTEPS_PER_KERNEL, N_TIMESTEPS_PER_KERNEL))
+        self.final_preprocess_stride = stride
+
+        self.n_process_units = self.n_process_units / total_lost_dims
+        self.n_process_units = 2 * int(self.n_process_units**2 / N_TIMESTEPS_PER_KERNEL)
+        for i in range(N_PROCESS_LAYERS):
+            v_print("Creating Linear layer", self.n_process_units, ">", self.n_process_units)
+            self.process_layers.append(nn.Linear(self.n_process_units, self.n_process_units).cuda())
         
-        for i in range(N_POST_DENSE_LAYERS):
-            v_print("Creating deconvolution layer", N_CHANNELS, ">", N_CHANNELS)
-            #self.pre_dense.append(nn.Tanh())
-            self.pre_dense.append(nn.ConvTranspose1d(N_CHANNELS, N_CHANNELS, kernel_size=KERNEL_SIZE, stride=1).cuda())
-        #for i in range(len(self.pre_dense)):
-        #    self.register_parameter("pre_dense_"+str(i), self.pre_dense[i])
-        #for i in range(len(self.denses)):
-        #    self.register_parameter("dense_"+str(i), self.denses[i])
-        #for i in range(len(self.post_dense)):
-        #    self.register_parameter("post_dense_"+str(i), self.post_dense[i])
-        self.pre_dense = nn.ModuleList(self.pre_dense).cuda()
-        self.denses = nn.ModuleList(self.denses).cuda()
-        self.post_dense = nn.ModuleList(self.post_dense).cuda()
+        n_deconv_filters = 0
+        deconv_kernel_size = KERNEL_SIZE
+        for i in range(1, N_POSTPROCESS_LAYERS):
+            n_deconv_filters = (1+N_CHANNELS)**(i+1)
+            deconv_kernel_size = KERNEL_SIZE**i
+            v_print("Creating deconvolution layer", (1+N_CHANNELS)**i, ">", n_deconv_filters)
+            self.postprocess_layers.append(nn.ConvTranspose1d((1+N_CHANNELS)**i, n_deconv_filters, kernel_size=deconv_kernel_size, stride=1).cuda())
+        v_print("Creating convolution layer", n_deconv_filters, ">", N_CHANNELS)
+        self.postprocess_layers.append(nn.Conv1d(n_deconv_filters, N_CHANNELS, kernel_size=KERNEL_SIZE, stride=1).cuda())
+        
+        self.preprocess_layers = nn.ModuleList(self.preprocess_layers).cuda()
+        self.process_layers = nn.ModuleList(self.process_layers).cuda()
+        self.postprocess_layers = nn.ModuleList(self.postprocess_layers).cuda()
 
     def gen_rnn(self, inputs, training=False):
         assert(GEN_MODE == 1)
@@ -115,26 +136,65 @@ class TA_Generator(nn.Module):
         return audio
 
     def run_dense_net(self, data, hilb_mode=False):
+        total_delta = 0
+        
+        v_print("|}} Initial data.shape:", data.shape)
+        
+        data, delta = prep_data_for_batch_operation(data, N_BATCHES, N_CHANNELS, None, greedy=True)
+        total_delta += delta
+        data = self.preprocess_layers[0](data.float())
+        v_print("|}} Pre-process layer 1 done.")
         v_print("|}} data.shape:", data.shape)
-        for i in range(len(self.pre_dense)):
-            data = self.pre_dense[i](data.float())
-            v_print("|}} Pre-Dense layer", i+1, "done.")
-        #data = data[:,-1,:]
-        # for i in range(len(self.denses)):
-        #     data = data.flatten()
-        #     v_print("|}} data.shape:", data.shape)
-        #     v_print("|}} ", self.denses[i].in_features)
-        #     data = self.denses[i](data)
-        #     v_print("|}} Dense layer", i+1, "done.")
-        v_print("|}} data.shape:", data.shape)
-        if hilb_mode:
-            data = prep_data_for_batch_operation(data, N_BATCHES, N_CHANNELS, None)
-        else:
-            data = prep_data_for_batch_operation(data, N_BATCHES, N_CHANNELS, None)
-        for i in range(len(self.post_dense)):
+        for i in range(N_PREPROCESS_LAYERS-1):
+            data, delta = prep_data_for_batch_operation(data, N_BATCHES, 2+self.offset+N_CHANNELS*(N_PREPROCESS_LAYERS-(i+1)), None, greedy=True)
+            total_delta += delta
+            data = self.preprocess_layers[i+1](data.float())
+            v_print("|}} Pre-process layer", i+2, "done.")
             v_print("|}} data.shape:", data.shape)
-            data = self.post_dense[i](data)
-            v_print("|}} Post-Dense layer", i+1, "done.")
+        v_print("|}} Chopping data to final batch (", data.shape[0], ") and timestep (", data.shape[1], ")")
+        data = data[-1:, -1, :]
+        data, delta = prep_data_for_batch_operation(data, 1, 1, None, greedy=True)
+        total_delta += delta
+        v_print("|}} data.shape:", data.shape)
+        #data = self.preprocess_layers[-1](data.float())
+        #v_print("|}} Pre-process layer", N_PREPROCESS_LAYERS, "done.")
+        #v_print("|}} data.shape:", data.shape)
+
+        # remove any zero padding we've had to add during reshapes
+        data = data.flatten()
+        if total_delta > 0:
+            v_print("|}} Removing delta:", total_delta//self.final_preprocess_stride)
+            data = data[:-total_delta//self.final_preprocess_stride]
+        total_delta = 0
+
+        data, delta = prep_data_for_batch_operation(data, 1, self.n_process_units, None, greedy=True)
+        total_delta += delta
+        data = torch.squeeze(data)
+        data = data.flatten()
+        v_print("|}} data.shape going into process layers:", data.shape)
+        for i in range(len(self.process_layers)):
+            data = self.process_layers[i](data)
+            data = data.flatten()
+            v_print("|}} Process layer", i+1, "done.")
+            v_print("|}} data.shape:", data.shape)
+
+        for i in range(1, len(self.postprocess_layers)):
+            data, delta = prep_data_for_batch_operation(data, N_BATCHES, (1+N_CHANNELS)**i, None, greedy=True)
+            total_delta += delta
+            data = self.postprocess_layers[i-1](data)
+            v_print("|}} Post-process layer", i, "done.")
+            v_print("|}} data.shape:", data.shape)
+        data, delta= prep_data_for_batch_operation(data, N_BATCHES, (1+N_CHANNELS)**N_POSTPROCESS_LAYERS, None, greedy=True)
+        total_delta += delta
+        data = self.postprocess_layers[-1](data)
+        v_print("|}} Post-process layer", N_POSTPROCESS_LAYERS, "done.")
+        v_print("|}} data.shape:", data.shape)
+        data = data.flatten()
+        if total_delta > 0:
+            v_print("|}} Removing delta:", total_delta)
+            data = data[:-total_delta]
+        total_delta = 0
+        v_print("|}} Final data.shape:", data.shape)
         return data
 
     def gen_dense_hilb(self, hilb, training=False):
@@ -168,9 +228,12 @@ class TA_Generator(nn.Module):
         audio = torch.squeeze(audio)
         #audio = audio[:, -1, :] # the last
 
-        v_print("|}} audio.shape:", audio.shape)
         audio = torch.flatten(audio)
-        assert(audio.shape[0] == TOTAL_SAMPLES)
+        audio, error = ensure_size(audio, TOTAL_SAMPLES)
+        if error > 0:
+            v_print("|} Truncated output audio by", error, "samples.")
+        else:
+            v_print("|} Padded output audio by", -error, "samples.")
         return audio
 
     def gen_fn(self, inputs, training=False):

@@ -302,13 +302,46 @@ def find_shape_from(actual, exp_batches, exp_channels, exp_timesteps):
   if exp_timesteps is None:
     exp_timesteps = actual / (exp_channels * exp_batches)
   target = int(exp_batches)*int(exp_channels)*int(exp_timesteps)
-  assert(target == actual)
+  if target != actual:
+    assert(False)
   return (int(exp_batches), int(exp_channels), int(exp_timesteps))
-  
-def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps):
-  actual = torch.flatten(t).shape[0]
-  b, c, s = find_shape_from(actual, exp_batches, exp_channels, exp_timesteps)
-  return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s))
+
+def get_size_diff(t, size):
+  t = torch.flatten(t)
+  return t.shape[0] - size
+
+def ensure_size(t, size):
+  t = torch.flatten(t)
+  delta = get_size_diff(t, size)
+  if delta < 0:
+    t = torch.cat((t, torch.zeros(-delta).cuda()))
+  elif delta > 0:
+    t = t[:-delta]
+  return t, delta
+
+def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, greedy=False):
+  t = torch.flatten(t)
+  actual = t.shape[0]
+  b, c, s = None, None, None
+  delta = 0
+  try:
+    b, c, s = find_shape_from(actual, exp_batches, exp_channels, exp_timesteps)
+  except:
+    if greedy:
+      # zero pad the result until it's valid
+      while b is None or c is None or s is None:
+        delta += 1
+        try:
+          b, c, s = find_shape_from(actual+delta, exp_batches, exp_channels, exp_timesteps)
+        except:
+          pass
+      t = torch.cat((t, torch.zeros(delta).cuda()))
+    else:
+      assert(False)
+  if greedy:
+    return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s)), delta
+  else:
+    return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s))
   #return tf.reshape(t, (N_BATCHES, 2, 1))
 def normalize_audio(a):
   return a/torch.max(torch.abs(a))
