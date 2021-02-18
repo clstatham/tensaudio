@@ -7,8 +7,8 @@ import scipy.signal
 from global_constants import *
 
 def spectral_convolution(in1, in2):
-    spec1 = np.fft.fft(in1)
-    spec2 = np.fft.fft(in2)
+    spec1 = np.fft.fft(in1.cpu())
+    spec2 = np.fft.fft(in2.cpu())
     conv = np.multiply(spec1, spec2)
     return np.real(np.fft.ifft(conv))
 
@@ -54,7 +54,7 @@ def hilbert_from_scratch(u):
     return v
 
 def my_hilbert(inp):
-    analytic_signal = scipy.signal.hilbert(inp)
+    analytic_signal = scipy.signal.hilbert(inp.cpu())
     #analytic_signal = hilbert_from_scratch(inp)
     amplitude_envelope = torch.from_numpy(np.abs(analytic_signal)).cuda()
     instantaneous_phase = torch.from_numpy(np.unwrap(np.angle(analytic_signal))).cuda()
@@ -69,16 +69,6 @@ def invert_hilb_tensor(t):
 
 def prep_hilb_for_denses(t):
     return torch.flatten(t)
-
-def prep_hilb_for_batch_operation(t, exp_batches, exp_timesteps, exp_units):
-    # this took me FUCKING FOREVER TO FIGURE OUT
-    tmp = torch.flatten(t).shape[0]
-    total = exp_batches*exp_timesteps*exp_units
-    assert(total == tmp)
-    batches_ratio = exp_batches / total
-    timesteps_ratio = exp_timesteps / total
-    units_ratio = exp_units / total
-    return torch.reshape(torch.as_tensor(t).cuda(), (int(tmp*batches_ratio), int(tmp*timesteps_ratio), int(tmp*units_ratio)))
 
 def stack_hilb(t):
     return np.dstack((t.cpu()[0], t.cpu()[1]))

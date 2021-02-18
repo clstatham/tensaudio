@@ -2,8 +2,6 @@ import collections
 import os
 import time
 from datetime import datetime
-import gc
-import multiprocessing
 
 import librosa
 import matplotlib.pyplot as plt
@@ -106,7 +104,7 @@ def iterate_and_resample(files):
 def select_input(idx):
     x = torch.tensor(INPUTS[idx]).cuda()
     if len(x) < TOTAL_SAMPLES:
-        x = torch.cat((x, torch.tensor([0]*(TOTAL_SAMPLES-len(x)).cuda())))
+        x = torch.cat((x, torch.tensor([0]*(TOTAL_SAMPLES-len(x))).cuda()))
 
     x = x[SLICE_START:TOTAL_SAMPLES]
     return normalize_audio(x)
@@ -165,11 +163,11 @@ def create_inputs():
         y = get_random_example_result()
 
         if INPUT_MODE == 'conv':
-            y = spectral_convolution(x, y)
+            y = torch.from_numpy(spectral_convolution(x, y))
         return x, y
 
 def generate_input_noise():
-    return torch.rand([2*N_BATCHES*N_TIMESTEPS])
+    return torch.rand([TOTAL_SAMPLES])
 
 gen_loss, dis_loss = None, None
 
@@ -287,8 +285,8 @@ v_print("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "E
 
 gen = TA_Generator().cuda()
 dis = DPAM_Discriminator().cuda()
-gen_optim = torch.optim.Adam(gen.parameters(), lr=GENERATOR_LR)
-dis_optim = torch.optim.Adam(dis.parameters(), lr=DISCRIMINATOR_LR)
+gen_optim = torch.optim.SGD(gen.parameters(), lr=GENERATOR_LR, momentum=0.9)
+dis_optim = torch.optim.SGD(dis.parameters(), lr=DISCRIMINATOR_LR, momentum=0.9)
 
 onestep = OneStep(gen)
 

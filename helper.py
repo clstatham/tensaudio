@@ -294,14 +294,21 @@ def voc_ap(rec, prec, use_07_metric=True):
         ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
     return ap
 
-def prep_audio_for_batch_operation(t, exp_batches, exp_timesteps, exp_units):
-  tmp = torch.flatten(t).shape[0]
-  total = exp_batches*exp_timesteps*exp_units
-  assert(total == tmp)
-  batches_ratio = exp_batches / total
-  timesteps_ratio = exp_timesteps / total
-  units_ratio = exp_units / total
-  return torch.reshape(torch.as_tensor(t).cuda(), (int(tmp*batches_ratio), int(tmp*timesteps_ratio), int(tmp*units_ratio)))
+def find_shape_from(actual, exp_batches, exp_channels, exp_timesteps):
+  if exp_batches is None:
+    exp_batches = actual / (exp_channels * exp_timesteps)
+  if exp_channels is None:
+    exp_channels = actual / (exp_batches * exp_timesteps)
+  if exp_timesteps is None:
+    exp_timesteps = actual / (exp_channels * exp_batches)
+  target = int(exp_batches)*int(exp_channels)*int(exp_timesteps)
+  assert(target == actual)
+  return (int(exp_batches), int(exp_channels), int(exp_timesteps))
+  
+def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps):
+  actual = torch.flatten(t).shape[0]
+  b, c, s = find_shape_from(actual, exp_batches, exp_channels, exp_timesteps)
+  return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s))
   #return tf.reshape(t, (N_BATCHES, 2, 1))
 def normalize_audio(a):
   return a/torch.max(torch.abs(a))

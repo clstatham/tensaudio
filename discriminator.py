@@ -12,7 +12,7 @@ import inspect
 
 class DPAM_Discriminator(nn.Module):
     def __init__(self, n_layers=N_DIS_LAYERS, reuse=False, norm_type="SBN",
-                ksz=2, base_channels=32, blk_channels=5, *args, **kwargs):
+                ksz=4, base_channels=N_CHANNELS, blk_channels=4, *args, **kwargs):
         super(DPAM_Discriminator, self).__init__(*args, **kwargs)
        
         self.loss = nn.L1Loss()
@@ -20,17 +20,10 @@ class DPAM_Discriminator(nn.Module):
         self.ln_layers = []
         self.base_channels = base_channels
         self.blk_channels = blk_channels
-        n_channels_last = 0
+        self.ksz = ksz
         for i in range(n_layers):
-            n_channels = base_channels * (2 ** (i // blk_channels)) # UPDATE CHANNEL COUNT
-            
             self.ln_layers.append(nn.ReLU())
-            if i == 0:
-                self.ln_layers.append(nn.Conv1d(N_TIMESTEPS, n_channels, ksz, stride=1))
-            else:
-                self.ln_layers.append(nn.Conv1d(n_channels_last, n_channels, ksz, stride=1))
-            
-            n_channels_last = n_channels
+            self.ln_layers.append(nn.Conv1d(self.layer_channels_by_index(i), self.layer_channels_by_index(i+1), ksz, stride=1))
             #self.ln_layers.append(nn.Dropout(1.0))
         self.ln_layers = nn.ModuleList(self.ln_layers)
 
@@ -52,10 +45,17 @@ class DPAM_Discriminator(nn.Module):
         op = torch.flatten(op)
         return self.loss(ex, op)
 
+    def layer_channels_by_index(self, i):
+        return np.max((1, self.base_channels * (i)))
+
     def call_ln(self, inp):
-        out = inp
+        out = inp.float()
+        i = 1
         for layer in self.ln_layers:
+            n_channels = self.layer_channels_by_index(i)
+            #out = prep_data_for_batch_operation(out, N_BATCHES, n_channels, None)
             out = layer(out)
+            i += 1
         return out
 
     def featureloss_batch(self, target, current):
@@ -65,7 +65,7 @@ class DPAM_Discriminator(nn.Module):
         
         loss_vec = []
         
-        channels = np.asarray([self.base_channels * (2 ** (i // self.blk_channels)) for i in range(len(self.ln_layers))])
+        channels = np.asarray([self.layer_channels_by_index(i) for i in range(len(self.ln_layers))])
         
         for i in range(len(self.ln_layers)):
             loss_result=l2_loss(feat_target[i], feat_current[i])
@@ -82,16 +82,17 @@ class DPAM_Discriminator(nn.Module):
         # input1_wav = tf.expand_dims(input1_wav, axis=0)
         # clean1_wav = tf.expand_dims(clean1_wav, axis=0)
         # clean1_wav = tf.expand_dims(clean1_wav, axis=0)
-        input1_wav = prep_audio_for_batch_operation(input1_wav, N_BATCHES, N_TIMESTEPS, N_UNITS)
-        clean1_wav = prep_audio_for_batch_operation(clean1_wav, N_BATCHES, N_TIMESTEPS, N_UNITS)
+        channels = [self.layer_channels_by_index(i) for i in range(len(self.ln_layers))]
+        input1_wav = prep_data_for_batch_operation(input1_wav, N_BATCHES, channels[0], None)
+        clean1_wav = prep_data_for_batch_operation(clean1_wav, N_BATCHES, channels[0], None)
 
         others = self.featureloss_batch(input1_wav,clean1_wav)
 
         res=torch.sum(torch.tensor(others))
-        distance=torch.log(res)
+        res=torch.log(res)
         
-        distance=torch.sigmoid(distance)
-        dist_1=torch.reshape(distance,[-1,1,1]).cuda()
+        res=torch.sigmoid(res)
+        dist_1=torch.reshape(res,[-1,1,1]).cuda()
         
         dist_1 = self.dense1(dist_1)
         dist_1 = self.dense2(dist_1)
