@@ -1,40 +1,39 @@
 import six
 import numpy as np
-import tensorflow as tf
-import tensorflow.keras.backend as K
+import torch
+import torchaudio
 import scipy.signal
 
 from global_constants import *
 
 def spectral_convolution(in1, in2):
-    in1 = tf.cast(in1, tf.complex64)
-    in2 = tf.cast(in2, tf.complex64)
-    spec1 = tf.signal.fft(in1)
-    spec2 = tf.signal.fft(in2)
-    conv = tf.multiply(spec1, spec2)
-    return tf.math.real(tf.signal.ifft(conv))
+    spec1 = np.fft.fft(in1)
+    spec2 = np.fft.fft(in2)
+    conv = np.multiply(spec1, spec2)
+    return np.real(np.fft.ifft(conv))
 
 def inst_freq(inst_phase):
-    return np.diff(inst_phase) / (2.0*np.pi) * len(inst_phase)
+    t = inst_phase.clone().detach().cpu()
+    return np.diff(t) / (2.0*np.pi) * len(t)
 
-def inverse_hilbert_cos(amplitude_envelope, instantaneous_phase):
-    T = len(instantaneous_phase)
+# def inverse_hilbert_cos(amplitude_envelope, instantaneous_phase):
+#     T = len(instantaneous_phase)
 
-    sp = np.fft.fft(instantaneous_phase)
-    freq = np.fft.fftfreq(instantaneous_phase.shape[-1])
-    cos = []
-    for i in range(len(freq)):
-        cos.append(amplitude_envelope[i] * np.sum((sp[-i]+sp[i]).real/(2*T) * np.cos(2.*np.pi*freq[i] + instantaneous_phase[i])))
-    return cos
-def inverse_hilbert_sin(amplitude_envelope, instantaneous_phase):
-    T = len(instantaneous_phase)
+#     sp = np.fft.fft(instantaneous_phase)
+#     freq = np.fft.fftfreq(instantaneous_phase.shape[-1])
+#     cos = []
+#     for i in range(len(freq)):
+#         cos.append(amplitude_envelope[i] * np.sum((sp[-i]+sp[i]).real/(2*T) * np.cos(2.*np.pi*freq[i] + instantaneous_phase[i])))
+#     return cos
+# def inverse_hilbert_sin(amplitude_envelope, instantaneous_phase):
+#     T = len(instantaneous_phase)
 
-    sp = np.fft.fft(instantaneous_phase)
-    freq = np.fft.fftfreq(instantaneous_phase.shape[-1])
-    sin = []
-    for i in range(len(freq)):
-        sin.append(amplitude_envelope[i] * np.sum((sp[-i]-sp[i]).imag/(2*T) * np.sin(2.*np.pi*freq[i] + instantaneous_phase[i])))
-    return sin
+#     sp = np.fft.fft(instantaneous_phase)
+#     freq = np.fft.fftfreq(instantaneous_phase.shape[-1])
+#     sin = []
+#     for i in range(len(freq)):
+#         sin.append(amplitude_envelope[i] * np.sum((sp[-i]-sp[i]).imag/(2*T) * np.sin(2.*np.pi*freq[i] + instantaneous_phase[i])))
+#     return sin
 
 def hilbert_from_scratch(u):
     # N : fft length
@@ -55,20 +54,32 @@ def hilbert_from_scratch(u):
     return v
 
 def my_hilbert(inp):
-    analytic_signal = tf.numpy_function(scipy.signal.hilbert, (tf.expand_dims(inp, axis=0)), tf.complex64)
-    amplitude_envelope = tf.abs(analytic_signal)
-    instantaneous_phase = tf.numpy_function(
-        np.unwrap, tf.expand_dims(tf.numpy_function(np.angle,
-        (tf.expand_dims(analytic_signal, axis=0)), tf.float64), axis=0), tf.float64)
-    return tf.cast(amplitude_envelope, tf.float32), tf.cast(instantaneous_phase, tf.float32)
+    analytic_signal = scipy.signal.hilbert(inp)
+    #analytic_signal = hilbert_from_scratch(inp)
+    amplitude_envelope = torch.from_numpy(np.abs(analytic_signal)).cuda()
+    instantaneous_phase = torch.from_numpy(np.unwrap(np.angle(analytic_signal))).cuda()
+    return amplitude_envelope, instantaneous_phase
 
 def inverse_hilbert(amplitude_envelope, instantaneous_phase):
     # close enough i guess
-    return tf.concat(([0.], inst_freq(instantaneous_phase)), axis=0) * amplitude_envelope
+    return torch.cat((torch.tensor([0.]).cuda(), torch.from_numpy(inst_freq(instantaneous_phase)).cuda()), dim=0) * amplitude_envelope
 
-def hilb_tensor(amp, phase):
-    amp = tf.cast(amp, tf.float32)
-    phase = tf.cast(phase, tf.float32)
-    return tf.convert_to_tensor((amp, phase), dtype=tf.float32)
 def invert_hilb_tensor(t):
     return inverse_hilbert(t[0], t[1])
+
+def prep_hilb_for_denses(t):
+    return torch.flatten(t)
+
+def prep_hilb_for_batch_operation(t, exp_batches, exp_timesteps, exp_units):
+    # this took me FUCKING FOREVER TO FIGURE OUT
+    tmp = torch.flatten(t).shape[0]
+    total = exp_batches*exp_timesteps*exp_units
+    assert(total == tmp)
+    batches_ratio = exp_batches / total
+    timesteps_ratio = exp_timesteps / total
+    units_ratio = exp_units / total
+    return torch.reshape(torch.as_tensor(t).cuda(), (int(tmp*batches_ratio), int(tmp*timesteps_ratio), int(tmp*units_ratio)))
+
+def stack_hilb(t):
+    return np.dstack((t.cpu()[0], t.cpu()[1]))
+

@@ -1,5 +1,3 @@
-import numpy as np
-
 RESOURCES_DIR = "D:\\tensaudio_resources"
 EXAMPLES_DIR = "kicks"
 EXAMPLE_RESULTS_DIR = "fire"
@@ -11,9 +9,9 @@ TRAINING_DIR = "D:\\tensaudio_training"
 MODEL_DIR = "D:\\tensaudio_models"
 
 # set to 0 to disable periodically generating progress updates
-SAVE_EVERY_ITERS = 100
+SAVE_EVERY_ITERS = 1000
 # set to 0 to disable periodically saving model
-SAVE_MODEL_EVERY_ITERS = 100*10
+SAVE_MODEL_EVERY_ITERS = 1000*10
 
 VERBOSE_OUTPUT = False
 
@@ -22,18 +20,22 @@ VERBOSE_OUTPUT = False
 # an error!
 INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
                         # 'conv' = comparison of example and convolved example result
-GEN_MODE = 0 # 0 = convolution/dense/deconvolution mode, 1 = RNN mode
+
+GEN_MODE = 2            # 0 = RNN/Hilbert mode
+                        # 1 = RNN/Audio mode
+                        # 2 = Conv/Hilbert mode
+                        # 3 = Conv/Audio mode
 USE_REAL_AUDIO = False
 SAMPLE_RATE = 16000
 SUBTYPE = 'PCM_16'
-SECONDS_OF_AUDIO = 6
+SECONDS_OF_AUDIO = 4
 SLICE_START = 0
 N_RNN_LAYERS = 4
 N_PRE_DENSE_LAYERS = 1
-N_DENSE_LAYERS = 8
+N_DENSE_LAYERS = 1
 N_POST_DENSE_LAYERS = 1
 N_TIMESTEPS = 50
-KERNEL_SIZE = 16
+KERNEL_SIZE = 8
 GENERATOR_LR = 0.001
 
 # If you change ANY of the following values, you MUST empty
@@ -42,7 +44,11 @@ GENERATOR_LR = 0.001
 N_DIS_LAYERS = 14
 DISCRIMINATOR_LR = 0.5
 
-# DO NOT CHANGE THESE
+# DO NOT CHANGE ANYTHING BELOW THIS LINE!
+# ---------------------------------------------------------------------------------
+
+import numpy as np
+
 TOTAL_SAMPLES = int(SAMPLE_RATE * SECONDS_OF_AUDIO) - SLICE_START
 N_BATCHES = TOTAL_SAMPLES // (KERNEL_SIZE * N_TIMESTEPS * 2)
 if TOTAL_SAMPLES % (KERNEL_SIZE * N_TIMESTEPS * 2) != 0:
@@ -53,6 +59,8 @@ if TOTAL_SAMPLES % N_BATCHES != 0:
 N_UNITS = TOTAL_SAMPLES // (N_TIMESTEPS * N_BATCHES)
 if N_UNITS <= KERNEL_SIZE:
     raise ValueError("N_UNITS must be greater than KERNEL_SIZE - pick a smaller N_TIMESTEPS!", N_UNITS)
+if TOTAL_SAMPLES % (N_TIMESTEPS * N_BATCHES) != 0:
+    raise ValueError("Could not calculate N_UNITS: Total length of audio not divisible by", (N_TIMESTEPS * N_BATCHES))
 N_POST_DENSE_BATCHES = N_BATCHES
 N_PRE_DENSE_FILTERS = SAMPLES_PER_BATCH // (2*(N_PRE_DENSE_LAYERS+1))
 if SAMPLES_PER_BATCH % (2*(N_PRE_DENSE_LAYERS+1)) != 0:

@@ -2,6 +2,8 @@ import collections
 import os
 import time
 from datetime import datetime
+import gc
+import multiprocessing
 
 import librosa
 import matplotlib.pyplot as plt
@@ -9,24 +11,14 @@ import numpy as np
 import scipy.io.wavfile
 import six
 import soundfile
-import tensorflow as tf
-import tensorflow.keras.backend as K
-from tensorflow import keras
+import torch
+import torchaudio
 
 from discriminator import DPAM_Discriminator
-from generator import TA_Generator, prep_hilb_for_dis
+from generator import TA_Generator
 from global_constants import *
 from helper import *
 from hilbert import *
-from network_model import *
-
-print("TensorFlow version:", tf.version.VERSION)
-
-physical_devices = tf.config.list_physical_devices('GPU') 
-tf.config.experimental.set_memory_growth(physical_devices[0], True)
-tf.config.run_functions_eagerly(True)
-K.clear_session()
-tf.compat.v1.reset_default_graph() 
 
 np.random.seed(int(round(time.time())))
 
@@ -112,17 +104,17 @@ def iterate_and_resample(files):
 
 
 def select_input(idx):
-    x = tf.cast(INPUTS[idx], tf.float32)
-    if x.shape[0] < TOTAL_SAMPLES:
-        x = K.concatenate((x, [0]*(TOTAL_SAMPLES-x.shape[0])))
+    x = torch.tensor(INPUTS[idx]).cuda()
+    if len(x) < TOTAL_SAMPLES:
+        x = torch.cat((x, torch.tensor([0]*(TOTAL_SAMPLES-len(x)).cuda())))
 
     x = x[SLICE_START:TOTAL_SAMPLES]
     return normalize_audio(x)
 
 def get_example(idx):
-    x = tf.cast(EXAMPLES[idx], tf.float32)
-    if x.shape[0] < TOTAL_SAMPLES:
-        x = K.concatenate((x, [0]*(TOTAL_SAMPLES-x.shape[0])))
+    x = torch.tensor(EXAMPLES[idx]).cuda()
+    if len(x) < TOTAL_SAMPLES:
+        x = torch.cat((x, torch.tensor([0]*(TOTAL_SAMPLES-len(x))).cuda()))
 
     x = x[SLICE_START:TOTAL_SAMPLES]
     return normalize_audio(x)
@@ -130,9 +122,9 @@ def get_random_example():
     return get_example(np.random.randint(len(EXAMPLES)))
 
 def get_example_result(idx):
-    x = tf.cast(EXAMPLE_RESULTS[idx], tf.float32)
-    if x.shape[0] < TOTAL_SAMPLES:
-        x = K.concatenate((x, [0]*(TOTAL_SAMPLES-x.shape[0])))
+    x = torch.tensor(EXAMPLE_RESULTS[idx]).cuda()
+    if len(x) < TOTAL_SAMPLES:
+        x = torch.cat((x, torch.tensor([0]*(TOTAL_SAMPLES-len(x))).cuda()))
 
     x = x[SLICE_START:TOTAL_SAMPLES]
     return normalize_audio(x)
@@ -168,7 +160,6 @@ class OneStep():
 
         return predicted_logits
 
-@tf.function
 def create_inputs():
         x = get_random_example()
         y = get_random_example_result()
@@ -178,12 +169,28 @@ def create_inputs():
         return x, y
 
 def generate_input_noise():
-    return tf.random.normal([N_BATCHES*N_TIMESTEPS])
+    return torch.rand([2*N_BATCHES*N_TIMESTEPS])
 
-gen_tape = tf.GradientTape(persistent=False)
-dis_tape = tf.GradientTape(persistent=False)
+gen_loss, dis_loss = None, None
 
-@tf.function
+def run_models(x, y, z):
+    global gen_loss, dis_loss
+    v_print("| Generating...")
+    g = gen.forward(x, training=True)
+    v_print("| g.shape:", g.shape)
+    record_amp_phase(g[0], g[1])
+    v_print("| Discriminating...")
+    real_o = torch.flatten(dis.forward(z, y))
+    fake_o = torch.flatten(dis.forward(z, g))
+    v_print("| Calculating Loss...")
+    gen_loss = gen.criterion(fake_o)
+    dis_loss = dis.criterion(real_o, fake_o)
+    gen_loss.backward(retain_graph=True)
+    dis_loss.backward()
+    print("|] Fake Verdict:\t", round(float(fake_o), 4))
+    print("|] Real Verdict:\t", round(float(real_o), 4))
+    return g
+
 def train_on_random(i, dirname):
     x, y = create_inputs()
     _, z = create_inputs()
@@ -192,41 +199,31 @@ def train_on_random(i, dirname):
     if SAVE_EVERY_ITERS > 0 and i % SAVE_EVERY_ITERS == 0 and dirname is not None:
         print("Writing training data to disk.")
         timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
-        scaled1 = np.int16(normalize_audio(x) * 32767)
-        scaled2 = np.int16(normalize_audio(y) * 32767)
-        scaled3 = np.int16(normalize_audio(z) * 32767)
+        scaled1 = np.int16(normalize_audio(x.cpu()) * 32767)
+        scaled2 = np.int16(normalize_audio(y.cpu()) * 32767)
+        scaled3 = np.int16(normalize_audio(z.cpu()) * 32767)
         soundfile.write(dirname+'/iter'+str(i)+'_x_'+timestamp+'.wav', scaled1, SAMPLE_RATE, SUBTYPE)
         soundfile.write(dirname+'/iter'+str(i)+'_y_'+timestamp+'.wav', scaled2, SAMPLE_RATE, SUBTYPE)
         soundfile.write(dirname+'/iter'+str(i)+'_z_'+timestamp+'.wav', scaled3, SAMPLE_RATE, SUBTYPE)
     v_print("Passing training data to models.")
     begin_time = time.time()
-    with gen_tape, dis_tape:
-        v_print("| Generating...")
-        g = gen(x, training=True)
-        record_amp_phase(g[0], g[1])
-        v_print("| Discriminating...")
-        real_o = dis(z, y)
-        fake_o = dis(z, g)
-        v_print("| Calculating Loss...")
-        gen_loss = gen.loss(fake_o)
-        dis_loss = dis.loss(real_o, fake_o)
+    gen_optim.zero_grad()
+    dis_optim.zero_grad()
+    g = run_models(x, y, z)
     total_gen_losses.append(gen_loss)
     total_dis_losses.append(dis_loss)
-    v_print("| Applying gradients...")
-    gen_grads = gen_tape.gradient(gen_loss, gen.trainable_weights)
-    gen.optimizer.apply_gradients(zip(gen_grads, gen.trainable_weights))
-    dis_grads = dis_tape.gradient(dis_loss, dis.trainable_weights)
-    dis.optimizer.apply_gradients(zip(dis_grads, dis.trainable_weights))
-    print("|] Fake Verdict:\t", round(float(fake_o), 4))
-    print("|] Real Verdict:\t", round(float(real_o), 4))
     print("|] Gen Loss:\t\t", round(float(gen_loss), 4))
     print("|] Dis Loss:\t\t", round(float(dis_loss), 4))
+    v_print("| Applying gradients...")
+    gen_optim.step()
+    dis_optim.step()
+
     time_diff = time.time() - begin_time
     print("Models successfully trained in", str(round(time_diff, ndigits=2)), "seconds.")
-    if SAVE_MODEL_EVERY_ITERS > 0 and i % SAVE_MODEL_EVERY_ITERS == 0:
-        print("Saving checkpoints for models...")
-        gen.manager.save(i)
-        dis.manager.save(i)
+    # if SAVE_MODEL_EVERY_ITERS > 0 and i % SAVE_MODEL_EVERY_ITERS == 0:
+    #     print("Saving checkpoints for models...")
+    #     torch.save(gen, os.path.join(MODEL_DIR, "gen_ckpts"))
+    #     torch.save(dis, os.path.join(MODEL_DIR, "dis_ckpts"))
     
     return g
 
@@ -260,14 +257,14 @@ def train_until_interrupt():
             i += 1
         except KeyboardInterrupt:
             break
-    print("Saving weights to disk...")
-    timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
-    dirname = os.path.join(MODEL_DIR, "gen_weights", timestamp)
-    os.mkdir(dirname)
-    gen.save_weights(os.path.join(dirname, "gen_weights"))
-    dirname = os.path.join(MODEL_DIR, "dis_weights", timestamp)
-    os.mkdir(dirname)
-    dis.save_weights(os.path.join(dirname, "dis_weights"))
+    # print("Saving weights to disk...")
+    # timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
+    # dirname = os.path.join(MODEL_DIR, "gen_weights", timestamp)
+    # os.mkdir(dirname)
+    # gen.save_weights(os.path.join(dirname, "gen_weights"))
+    # dirname = os.path.join(MODEL_DIR, "dis_weights", timestamp)
+    # os.mkdir(dirname)
+    # dis.save_weights(os.path.join(dirname, "dis_weights"))
     print()
     print("="*80)
     print("MODEL TRAINING FINISHED AT", timestamp)
@@ -288,10 +285,10 @@ INPUTS = iterate_and_resample(INPUT_FILES)
 EXAMPLE_RESULTS = iterate_and_resample(EXAMPLE_RESULT_FILES)
 v_print("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
-gen = TA_Generator()
-dis = DPAM_Discriminator()
-gen.compile(optimizer=gen.optimizer, loss=gen.loss)
-dis.compile(optimizer=dis.optimizer, loss=dis.loss)
+gen = TA_Generator().cuda()
+dis = DPAM_Discriminator().cuda()
+gen_optim = torch.optim.Adam(gen.parameters(), lr=GENERATOR_LR)
+dis_optim = torch.optim.Adam(dis.parameters(), lr=DISCRIMINATOR_LR)
 
 onestep = OneStep(gen)
 

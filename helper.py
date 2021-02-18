@@ -1,7 +1,5 @@
 import numpy as np
-import tensorflow as tf
-#import tensorflow.contrib.slim as slim
-import tensorflow.keras
+import torch
 from sklearn.preprocessing import normalize
 
 import soundfile
@@ -10,7 +8,7 @@ from global_constants import *
 
 # LEAKY RELU UNIT
 def lrelu(x):
-    return tf.maximum(0.2*x,x)
+    return torch.max(0.2*x,x)
 
 
 # GENERATE DILATED LAYER FROM 1D SIGNAL
@@ -68,7 +66,7 @@ def l1_loss_batch(target):
 
 # L2 LOSS FUNCTION
 def l2_loss(target,current):
-    return tf.reduce_mean(tf.square(target-current))
+    return torch.mean(torch.square(target-current))
 
 def l2_loss_unit(target,current):
     target=tf.linalg.l2_normalize(target,axis=3)
@@ -296,11 +294,17 @@ def voc_ap(rec, prec, use_07_metric=True):
         ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
     return ap
 
-def prep_audio_for_batch_operation(t):
-  return tf.reshape(t, (N_BATCHES, N_TIMESTEPS, N_UNITS))
+def prep_audio_for_batch_operation(t, exp_batches, exp_timesteps, exp_units):
+  tmp = torch.flatten(t).shape[0]
+  total = exp_batches*exp_timesteps*exp_units
+  assert(total == tmp)
+  batches_ratio = exp_batches / total
+  timesteps_ratio = exp_timesteps / total
+  units_ratio = exp_units / total
+  return torch.reshape(torch.as_tensor(t).cuda(), (int(tmp*batches_ratio), int(tmp*timesteps_ratio), int(tmp*units_ratio)))
   #return tf.reshape(t, (N_BATCHES, 2, 1))
 def normalize_audio(a):
-  return a/np.max(np.abs(a))
+  return a/torch.max(torch.abs(a))
 def write_normalized_audio_to_disk(a, fn):
-  scaled = np.int16(normalize_audio(a) * 32767)
+  scaled = np.int16(normalize_audio(a.detach().cpu()) * 32767)
   soundfile.write(fn, scaled, SAMPLE_RATE, SUBTYPE)
