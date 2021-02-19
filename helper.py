@@ -1,7 +1,9 @@
 import numpy as np
 import torch
+from torch.autograd import Function
 from sklearn.preprocessing import normalize
 
+import librosa
 import soundfile
 
 from global_constants import *
@@ -295,38 +297,49 @@ def voc_ap(rec, prec, use_07_metric=True):
     return ap
 
 def find_shape_from(actual, exp_batches, exp_channels, exp_timesteps):
-  if exp_batches is None:
-    exp_batches = actual / (exp_channels * exp_timesteps)
-  if exp_channels is None:
-    exp_channels = actual / (exp_batches * exp_timesteps)
+  # order is important here for dumb reasons
   if exp_timesteps is None:
-    exp_timesteps = actual / (exp_channels * exp_batches)
+    exp_timesteps = np.max((1, (actual / (exp_channels * exp_batches))))
+  if exp_batches is None:
+    exp_batches = np.max((1, (actual / (exp_channels * exp_timesteps))))
+  if exp_channels is None:
+    exp_channels = np.max((1, (actual / (exp_batches * exp_timesteps))))
   target = int(exp_batches)*int(exp_channels)*int(exp_timesteps)
   if target != actual:
-    assert(False)
+    # try again in case one was None
+    t = np.max((1, (actual / (exp_channels * exp_batches))))
+    b = np.max((1, (actual / (exp_channels * exp_timesteps))))
+    c = np.max((1, (actual / (exp_batches * exp_timesteps))))
+    target = int(t)*int(b)*int(c)
+    if target == actual:
+      return (int(t), int(b), int(c))
+    raise Exception(str(target)+" != "+str(actual))
   return (int(exp_batches), int(exp_channels), int(exp_timesteps))
 
-def get_size_diff(t, size):
-  t = torch.flatten(t)
-  return t.shape[0] - size
-
-def ensure_size(t, size):
-  t = torch.flatten(t)
-  delta = get_size_diff(t, size)
-  if delta < 0:
-    t = torch.cat((t, torch.zeros(-delta).cuda()))
-  elif delta > 0:
-    t = t[:-delta]
+def ensure_size(t, size, channels=1):
+  if channels == 1:
+    t = t.flatten()
+    delta = t.shape[0] - size
+    if delta < 0:
+      t = torch.cat((torch.tensor(t), torch.zeros(-delta).cuda()))
+    elif delta > 0:
+      t = t[:-delta]
+  else:
+    delta = t.shape[1]*channels - size
+    if delta < 0:
+      t = torch.tensor([torch.cat(t[i], torch.zeros(t[i].shape[0])) for i in range(channels)]).cuda()
+    elif delta > 0:
+      t = t[:][:-delta]
   return t, delta
 
-def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, greedy=False):
+def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, greedy=False, return_shape=False):
   t = torch.flatten(t)
   actual = t.shape[0]
   b, c, s = None, None, None
   delta = 0
   try:
     b, c, s = find_shape_from(actual, exp_batches, exp_channels, exp_timesteps)
-  except:
+  except Exception as e:
     if greedy:
       # zero pad the result until it's valid
       while b is None or c is None or s is None:
@@ -337,14 +350,35 @@ def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, g
           pass
       t = torch.cat((t, torch.zeros(delta).cuda()))
     else:
-      assert(False)
+      raise e
   if greedy:
-    return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s)), delta
+    if return_shape:
+      return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s)), delta, (b,c,s)
+    else:
+      return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s)), delta
   else:
-    return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s))
+    if return_shape:
+      return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s)), (b,c,s)
+    else:
+      return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s))
   #return tf.reshape(t, (N_BATCHES, 2, 1))
 def normalize_audio(a):
   return a/torch.max(torch.abs(a))
 def write_normalized_audio_to_disk(a, fn):
   scaled = np.int16(normalize_audio(a.detach().cpu()) * 32767)
   soundfile.write(fn, scaled, SAMPLE_RATE, SUBTYPE)
+
+class STFTWithGradients(Function):
+    @staticmethod
+    def forward(ctx, p, n_fft):
+        p_ = p.detach().cpu().numpy()
+        result = librosa.stft(p_, n_fft=n_fft)
+        return p.new((np.real(result), np.imag(result)))
+
+    @staticmethod
+    def backward(ctx, grad_output, n_fft):
+        if grad_output is None:
+            return None, None
+        numpy_go = grad_output.cpu().numpy()
+        result = librosa.stft(numpy_go, n_fft=n_fft)
+        return grad_output.new((np.real(result), np.imag(result)))
