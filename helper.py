@@ -115,12 +115,12 @@ def periodic_hann(window_length):
     A 1D np.array containing the periodic hann window.
   """
   return 0.5 - (0.5 * np.cos(2 * np.pi / window_length *
-                             np.arange(window_length)))
+                            np.arange(window_length)))
 
 
 def stft_magnitude(signal, fft_length,
-                   hop_length=None,
-                   window_length=None):
+                  hop_length=None,
+                  window_length=None):
   """Calculate the short-time Fourier transform magnitude.
   Args:
     signal: 1D np.array of the input time-domain signal.
@@ -198,10 +198,10 @@ def spectrogram_to_mel_matrix(num_mel_bins=64,
     raise ValueError("lower_edge_hertz %.1f must be >= 0" % lower_edge_hertz)
   if lower_edge_hertz >= upper_edge_hertz:
     raise ValueError("lower_edge_hertz %.1f >= upper_edge_hertz %.1f" %
-                     (lower_edge_hertz, upper_edge_hertz))
+                    (lower_edge_hertz, upper_edge_hertz))
   if upper_edge_hertz > nyquist_hertz:
     raise ValueError("upper_edge_hertz %.1f is greater than Nyquist %.1f" %
-                     (upper_edge_hertz, nyquist_hertz))
+                    (upper_edge_hertz, nyquist_hertz))
   spectrogram_bins_hertz = np.linspace(0.0, nyquist_hertz, num_spectrogram_bins)
   spectrogram_bins_mel = hertz_to_mel(spectrogram_bins_hertz)
   # The i'th mel band (starting from i=1) has center frequency
@@ -209,7 +209,7 @@ def spectrogram_to_mel_matrix(num_mel_bins=64,
   # band_edges_mel[i+1].  Thus, we need num_mel_bins + 2 values in
   # the band_edges_mel arrays.
   band_edges_mel = np.linspace(hertz_to_mel(lower_edge_hertz),
-                               hertz_to_mel(upper_edge_hertz), num_mel_bins + 2)
+                              hertz_to_mel(upper_edge_hertz), num_mel_bins + 2)
   # Matrix to post-multiply feature arrays whose rows are num_spectrogram_bins
   # of spectrogram values.
   mel_weights_matrix = np.empty((num_spectrogram_bins, num_mel_bins))
@@ -218,9 +218,9 @@ def spectrogram_to_mel_matrix(num_mel_bins=64,
     # Calculate lower and upper slopes for every spectrogram bin.
     # Line segments are linear in the *mel* domain, not hertz.
     lower_slope = ((spectrogram_bins_mel - lower_edge_mel) /
-                   (center_mel - lower_edge_mel))
+                  (center_mel - lower_edge_mel))
     upper_slope = ((upper_edge_mel - spectrogram_bins_mel) /
-                   (upper_edge_mel - center_mel))
+                  (upper_edge_mel - center_mel))
     # .. then intersect them with each other and zero.
     mel_weights_matrix[:, i] = np.maximum(0.0, np.minimum(lower_slope,
                                                           upper_slope))
@@ -283,7 +283,7 @@ def voc_ap(rec, prec, use_07_metric=True):
         # first append sentinel values at the end
         mrec = np.concatenate(([0.], rec, [1.]))
         mpre = np.concatenate(([0.], prec, [0.]))
-        #print('abc')
+        #cprint('abc')
         # compute the precision envelope
         for i in range(mpre.size - 1, 0, -1):
             mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
@@ -321,13 +321,19 @@ def ensure_size(t, size, channels=1):
     t = t.flatten()
     delta = t.shape[0] - size
     if delta < 0:
-      t = torch.cat((torch.tensor(t), torch.zeros(-delta).cuda()))
+      if type(t) == torch.Tensor:
+        t = torch.cat((t, torch.zeros(-delta).cuda()))
+      else:
+        t = np.concatenate((t, np.zeros(-delta)))
     elif delta > 0:
       t = t[:-delta]
   else:
     delta = t.shape[1]*channels - size
     if delta < 0:
-      t = torch.tensor([torch.cat(t[i], torch.zeros(t[i].shape[0])) for i in range(channels)]).cuda()
+      if type(t) == torch.Tensor:
+        t = torch.tensor([torch.cat(t[i], torch.zeros(t[i].shape[0])) for i in range(channels)]).cuda()
+      else:
+        t = [np.concatenate(t[i], np.zeros(len(t[i]))) for i in range(channels)]
     elif delta > 0:
       t = t[:][:-delta]
   return t, delta
@@ -370,15 +376,42 @@ def write_normalized_audio_to_disk(a, fn):
 
 class STFTWithGradients(Function):
     @staticmethod
-    def forward(ctx, p, n_fft):
+    def forward(ctx, p):
         p_ = p.detach().cpu().numpy()
-        result = librosa.stft(p_, n_fft=n_fft)
+        result = librosa.stft(p_, n_fft=N_FFT)
         return p.new((np.real(result), np.imag(result)))
 
     @staticmethod
-    def backward(ctx, grad_output, n_fft):
+    def backward(ctx, grad_output):
         if grad_output is None:
-            return None, None
+          return None, None
         numpy_go = grad_output.cpu().numpy()
-        result = librosa.stft(numpy_go, n_fft=n_fft)
+        #print(numpy_go.shape)
+        data = []
+        for i in range(len(numpy_go[0])):
+          d = []
+          for j in range(len(numpy_go[0][i])):
+            d.append(np.complex(numpy_go[0][i][j], numpy_go[1][i][j]))
+          data.append(d)
+        data = np.array(data)
+        orig_size = data.size//2
+        #print(orig_size)
+        result = librosa.istft(data)
+        #print(result.shape)
+        result, _ = ensure_size(result, TOTAL_SAMPLES_OUT, channels=1)
+        return grad_output.new(result)
+
+class InverseSTFTWithGradients(Function):
+    @staticmethod
+    def forward(ctx, p):
+        p_ = p.detach().cpu().numpy()
+        result = librosa.istft(p_)
+        return p.new((np.real(result), np.imag(result)))
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        if grad_output is None:
+          return None, None
+        numpy_go = grad_output.cpu().numpy()
+        result = librosa.stft(numpy_go, n_fft=N_FFT)
         return grad_output.new((np.real(result), np.imag(result)))
