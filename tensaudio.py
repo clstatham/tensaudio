@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 import curses
 
+import ctcsound
 import librosa
 import matplotlib.pyplot as plt
 from matplotlib import cm
@@ -15,7 +16,8 @@ import torch
 import torch.nn as nn
 
 from discriminator import DPAM_Discriminator
-from generator import TA_Generator
+from generator import TAAudioGenerator, TAInstParamGenerator
+from csoundinterface import CsoundInterface
 from global_constants import *
 from helper import *
 from hilbert import *
@@ -75,16 +77,14 @@ def plot_metrics(i, show=False):
 
 def open_truncate_pad(name):
     ret = []
-    for filename in os.listdir(os.path.join(os.getcwd(), RESOURCES_DIR, name)):
-        f = soundfile.SoundFile(os.path.join(os.getcwd(), RESOURCES_DIR, name, filename), "r")
+    for filename in os.listdir(os.path.join(RESOURCES_DIR, name)):
+        f = soundfile.SoundFile(os.path.join(RESOURCES_DIR, name, filename), "r")
         ret.append((f.read(), f.samplerate))
     return ret
 
-global frick
 def iterate_and_resample(files):
     arr = []
     for i in range(len(files)):
-        fn = str(i)
         frick = files[i][0]
         if len(frick.shape) > 1 and frick.shape[1] != 1:
             frick = np.transpose(frick)[0]
@@ -96,17 +96,17 @@ def iterate_and_resample(files):
 
 
 def select_input(idx):
-    x = torch.tensor(INPUTS[idx]).cuda()
+    x = INPUTS[idx]
     if len(x) < TOTAL_SAMPLES_OUT:
-        x = torch.cat((x, torch.tensor([0]*(TOTAL_SAMPLES_OUT-len(x))).cuda()))
-
+        x = np.concatenate((x, [0]*(TOTAL_SAMPLES_OUT-len(x))))
+    
     x = x[:TOTAL_SAMPLES_OUT]
     return normalize_audio(x)
 
 def get_example(idx):
-    x = torch.tensor(EXAMPLES[idx]).cuda()
+    x = EXAMPLES[idx]
     if len(x) < TOTAL_SAMPLES_OUT:
-        x = torch.cat((x, torch.tensor([0]*(TOTAL_SAMPLES_OUT-len(x))).cuda()))
+        x = np.concatenate((x, [0]*(TOTAL_SAMPLES_OUT-len(x))))
 
     x = x[:TOTAL_SAMPLES_OUT]
     return normalize_audio(x)
@@ -114,9 +114,9 @@ def get_random_example():
     return get_example(np.random.randint(len(EXAMPLES)))
 
 def get_example_result(idx):
-    x = torch.tensor(EXAMPLE_RESULTS[idx]).cuda()
+    x = EXAMPLE_RESULTS[idx]
     if len(x) < TOTAL_SAMPLES_OUT:
-        x = torch.cat((x, torch.tensor([0]*(TOTAL_SAMPLES_OUT-len(x))).cuda()))
+        x = np.concatenate((x, [0]*(TOTAL_SAMPLES_OUT-len(x))))
 
     x = x[:TOTAL_SAMPLES_OUT]
     return normalize_audio(x)
@@ -152,16 +152,19 @@ class OneStep():
             predicted_logits = self.generator(generate_input_noise(TOTAL_SAMPLES_IN)).detach().cpu()
         return predicted_logits
 
-def create_inputs():
-        x = get_random_example()
+def create_input():
+        #x = get_random_example()
         y = get_random_example_result()
 
-        if INPUT_MODE == 'conv':
-            y = torch.from_numpy(spectral_convolution(x, y)).cuda()
-        return x, y
+        #if INPUT_MODE == 'conv':
+        #    y = torch.from_numpy(spectral_convolution(x, y)).cuda()
+        return y
 
 def generate_input_noise(b_size):
-    return torch.randn(b_size, TOTAL_SAMPLES_IN, 1, 1).cuda()
+    if GEN_MODE in [5]:
+        return torch.randn(1, TOTAL_SAMPLES_IN, 1).cuda()
+    else:
+        return torch.randn(b_size, TOTAL_SAMPLES_IN, 1, 1).cuda()
 
 gen_loss, dis_loss = None, None
 
@@ -172,6 +175,17 @@ def weights_init(m):
     elif classname.find('BatchNorm') != -1:
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
+
+csi = CsoundInterface()
+
+def get_output_from_params(params, window):
+    params = params.abs().flatten().clone().detach().cpu().numpy()
+    csi.update_params(params[0:N_PARAMS])
+    audio = csi.perform(params, window)
+    #noise = np.random.randn(len(audio)) * 0.001
+    #for i in range(len(audio)):
+    #    audio[i] += noise[i]
+    return audio
 
 def run_models(window, real):
     global gen_loss, dis_loss
@@ -206,10 +220,17 @@ def run_models(window, real):
     errD_real.backward()
     D_x = output.mean().item()
 
-    noise = generate_input_noise(TOTAL_SAMPLES_IN)
-    fake = gen(noise)
+    if GEN_MODE in [5]:
+        noise = generate_input_noise(1)
+        params = gen(noise).flatten()
+        audio = get_output_from_params(params, window)
+        fake = torch.from_numpy(audio).float().cuda()
+    else:
+        noise = generate_input_noise(TOTAL_SAMPLES_IN)
+        fake = gen(noise)
     output = dis(fake).view(-1)
-    label.fill_(FAKE_LABEL)
+    b_size = output.size(0)
+    label = torch.full((b_size,), FAKE_LABEL, dtype=torch.float).cuda()
     errD_fake = dis.criterion(label, output)
     errD_fake.backward()
     D_G_z1 = output.mean().item()
@@ -222,7 +243,8 @@ def run_models(window, real):
         + str(round(float(torch.mean(output)), 4))
     )
     total_fake_verdicts.append(float(torch.mean(output)))
-    label.fill_(REAL_LABEL)
+    b_size = output.size(0)
+    label = torch.full((b_size,), REAL_LABEL, dtype=torch.float).cuda()
     errG = gen.criterion(label, output)
     errG.backward()
     gen_loss = errG
@@ -230,7 +252,7 @@ def run_models(window, real):
     gen_optim.step()
 
 def train_on_random(window, i, dirname):
-    _, z = create_inputs()
+    z = create_input()
     begin_time = time.time()
     run_models(window, z)
     total_gen_losses.append(gen_loss)
@@ -267,13 +289,19 @@ def train_until_interrupt(window, save_plots=False):
     clear()
 
     window.addstr(0,0, "="*80)
-    window.addstr(1,0, "MODEL TRAINING BEGINS AT "+timestamp)
+    window.addstr(1,0, "MODEL TRAINING STARTED AT "+timestamp)
     window.addstr(2,0, "="*80)
+
+    #csi.create_gen()
+    if csi.compile():
+        raise Exception("ctcsound compile() failed!")
+
+    csi.start()
 
     if MAX_ITERS == 0:
         i = -1
     while i < MAX_ITERS:
-        if time_passed > RUN_FOR_SEC:
+        if RUN_FOR_SEC > 0 and time_passed > RUN_FOR_SEC:
             break
         try:
             window.addstr(4,0, "*"*40)
@@ -296,8 +324,13 @@ def train_until_interrupt(window, save_plots=False):
                 if num_times_saved == 0:
                     os.mkdir(dirname)
                 begin_time = time.time()
-                out1 = onestep.generate_one_step()
-                amp, phase = my_hilbert(out1.numpy())
+                if GEN_MODE in [5]:
+                    params = onestep.generate_one_step()
+                    out1 = get_output_from_params(params, window)
+                    amp, phase = my_hilbert(out1)
+                else:
+                    out1 = onestep.generate_one_step().numpy()
+                    amp, phase = my_hilbert(out1)
                 if len(total_amps) <= num_times_saved:
                     total_amps.append(amp)
                 if len(total_phases) <= num_times_saved:
@@ -332,24 +365,33 @@ def train_until_interrupt(window, save_plots=False):
     window.addstr(15,0, "MODEL TRAINING FINISHED AT "+str(timestamp))
     window.addstr(16,0, "="*80)
     window.refresh()
-    time.sleep(1)
+    csi.stop()
+    #time.sleep(1)
     return i
 
-v_cprint("Opening examples...")
-EXAMPLE_FILES = open_truncate_pad(EXAMPLES_DIR)
 v_cprint("Opening example results...")
 EXAMPLE_RESULT_FILES = open_truncate_pad(EXAMPLE_RESULTS_DIR)
-v_cprint("Opening inputs...")
-INPUT_FILES = open_truncate_pad(INPUTS_DIR)
-v_cprint("We have", len(INPUT_FILES), "inputs in the folder.")
+if USE_REAL_AUDIO:
+    v_cprint("Opening examples...")
+    EXAMPLE_FILES = open_truncate_pad(EXAMPLES_DIR)
+    v_cprint("Opening inputs...")
+    INPUT_FILES = open_truncate_pad(INPUTS_DIR)
+    v_cprint("We have", len(INPUT_FILES), "inputs in the folder.")
 
 print("Resampling, stand by...")
-EXAMPLES = iterate_and_resample(EXAMPLE_FILES)
-INPUTS = iterate_and_resample(INPUT_FILES)
 EXAMPLE_RESULTS = iterate_and_resample(EXAMPLE_RESULT_FILES)
-v_cprint("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "Example Result Arrays.")
+if USE_REAL_AUDIO:
+    EXAMPLES = iterate_and_resample(EXAMPLE_FILES)
+    INPUTS = iterate_and_resample(INPUT_FILES)
+if USE_REAL_AUDIO:
+    v_cprint("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "Example Result Arrays.")
+else:
+    v_cprint("Created", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
-gen = TA_Generator().cuda()
+if GEN_MODE in [5]:
+    gen = TAInstParamGenerator().cuda()
+else:
+    gen = TAAudioGenerator().cuda()
 dis = DPAM_Discriminator().cuda()
 gen.apply(weights_init)
 dis.apply(weights_init)
@@ -364,7 +406,9 @@ if __name__ == "__main__":
     if USE_REAL_AUDIO:
         data = onestep.generate_one_step()
     else:
-        data = onestep.generate_one_step()
+        params = onestep.generate_one_step()
+        update_csound_interface(params)
+        data = csi.perform()
     print("Done!")
     amp, phase = my_hilbert(data)
     total_amps.append(amp)

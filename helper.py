@@ -369,16 +369,16 @@ def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, g
       return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s))
   #return tf.reshape(t, (N_BATCHES, 2, 1))
 def normalize_audio(a):
-  return a/torch.max(torch.abs(a))
+  return a/np.max(np.abs(a))
 def write_normalized_audio_to_disk(a, fn):
-  scaled = np.int16(normalize_audio(a.detach().cpu()) * 32767)
+  scaled = np.int16(normalize_audio(a) * 32767)
   soundfile.write(fn, scaled, SAMPLE_RATE, SUBTYPE)
 
 class STFTWithGradients(Function):
     @staticmethod
     def forward(ctx, p):
         p_ = p.detach().cpu().numpy()
-        result = librosa.stft(p_, n_fft=N_FFT)
+        result = librosa.stft(p_.astype('float32'), n_fft=N_FFT)
         return p.new((np.real(result), np.imag(result)))
 
     @staticmethod

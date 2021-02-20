@@ -15,9 +15,39 @@ from global_constants import *
 # foo = flatten_audio(foo)
 # cprint(foo)
 
-class TA_Generator(nn.Module):
+class TAInstParamGenerator(nn.Module):
     def __init__(self, **kwargs):
-        super().__init__()
+        super().__init__(**kwargs)
+        if GEN_MODE not in [5]:
+            raise ValueError("Created wrong generator class!")
+        
+        self.loss = nn.BCELoss()
+
+        self.n_outs = TOTAL_SAMPLES_OUT//KONTROL_SAMPLES
+
+        self.layers = nn.Sequential(
+            nn.ConvTranspose1d(TOTAL_SAMPLES_IN, N_PARAMS*self.n_outs, 1, 1),
+            nn.Flatten(),
+            nn.Linear(N_PARAMS*self.n_outs, N_PARAMS*self.n_outs),
+            nn.Linear(N_PARAMS*self.n_outs, N_PARAMS*self.n_outs),
+            nn.Linear(N_PARAMS*self.n_outs, N_PARAMS*self.n_outs),
+            nn.Linear(N_PARAMS*self.n_outs, N_PARAMS*self.n_outs),
+        )
+    
+    def criterion(self, label, output):
+        l = self.loss(torch.unsqueeze(output, 0), torch.unsqueeze(label, 0))
+        l = F.relu(l)
+        return l
+    
+    def forward(self, inp):
+        print(inp.shape)
+        out = self.layers.forward(inp)
+        print(out.shape)
+        return out
+
+class TAAudioGenerator(nn.Module):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self.rnn_state = None
 
         self.loss = nn.BCELoss()
@@ -25,13 +55,15 @@ class TA_Generator(nn.Module):
         if GEN_MODE == 0:
             #TODO: implement RNN/Hilbert mode
             raise NotImplementedError("TODO: implement RNN/Hilbert mode")
-        if GEN_MODE == 1:
+        elif GEN_MODE == 1:
             #TODO: port RNN/Audio code to pytorch
             raise NotImplementedError("TODO: implement RNN/Audio mode")
         elif GEN_MODE == 2:
             self.create_dense_net(hilb_mode=True)
         elif GEN_MODE == 3:
             self.create_dense_net(hilb_mode=False)
+        else:
+            raise ValueError("Created wrong generator class!")
 
     def criterion(self, label, output):
         l = self.loss(torch.unsqueeze(output, 0), torch.unsqueeze(label, 0))

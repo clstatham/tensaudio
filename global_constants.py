@@ -10,7 +10,7 @@ MODEL_DIR = "D:\\tensaudio_models"
 
 # set to 0 to run until Ctrl+C is input in the terminal
 MAX_ITERS = 0
-RUN_FOR_SEC = 30*60
+RUN_FOR_SEC = 0
 
 SLEEP_TIME = 0.001
 MAX_ITERS_PER_SEC = 0
@@ -28,21 +28,25 @@ VERBOSITY_LEVEL = 2 # 0, 1, 2
 INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
                         # 'conv' = comparison of example and convolved example result
 
-GEN_MODE = 3            # 0 = RNN/Hilbert mode
+GEN_MODE = 5            # 0 = RNN/Hilbert mode
                         # 1 = RNN/Audio mode
                         # 2 = Conv/Hilbert mode
                         # 3 = Conv/Audio mode
+                        # 5 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
 SAMPLE_RATE = 8000
 SUBTYPE = 'PCM_16'
 INPUT_DURATION = 4 / SAMPLE_RATE
 OUTPUT_DURATION = 2
 N_RNN_LAYERS = 4
+N_PARAMS = 8
+KONTROL_SAMPLES = 32
 DESIRED_PROCESS_UNITS = 1024
 N_PROCESS_LAYERS = 64
 BATCH_OPTIMIZATION_FACTOR = 4000
 GEN_KERNEL_SIZE = 1
 N_TIMESTEPS_PER_KERNEL = SAMPLE_RATE*OUTPUT_DURATION // (GEN_KERNEL_SIZE * 2)
+
 GENERATOR_LR = 0.0001
 GENERATOR_BETA = 0.3
 

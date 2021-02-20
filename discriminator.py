@@ -1,5 +1,3 @@
-from __future__ import absolute_import
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -70,6 +68,8 @@ class DPAM_Discriminator(nn.Module):
         return loss_result
 
     def forward(self, input1):
+        if type(input1) != torch.Tensor:
+            input1 = torch.from_numpy(input1).float().cuda()
         if DIS_MODE == 0:
             amp, phase = HilbertWithGradients.apply(input1).detach().cuda()
             hilb = torch.stack((amp, phase))
