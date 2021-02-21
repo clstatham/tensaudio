@@ -8,9 +8,9 @@ from hilbert import *
 import os
 import inspect
 
-class DPAM_Discriminator(nn.Module):
+class TADiscriminator(nn.Module):
     def __init__(self, *args, **kwargs):
-        super(DPAM_Discriminator, self).__init__(*args, **kwargs)
+        super(TADiscriminator, self).__init__(*args, **kwargs)
        
         self.loss = nn.BCELoss()
 

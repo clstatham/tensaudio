@@ -16,7 +16,7 @@ import soundfile
 import torch
 import torch.nn as nn
 
-from discriminator import DPAM_Discriminator
+from discriminator import TADiscriminator
 from generator import TAGenerator, TAInstParamGenerator
 from csoundinterface import CsoundInterface
 from global_constants import *
@@ -25,6 +25,7 @@ from hilbert import *
 from pgvis import G_vis
 
 np.random.seed(int(round(time.time())))
+torch.random.seed()
 
 total_amps = []
 total_phases = []
@@ -408,7 +409,7 @@ else:
     v_cprint("Created", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
 gen = TAInstParamGenerator().cuda()
-dis = DPAM_Discriminator().cuda()
+dis = TADiscriminator().cuda()
 gen.apply(weights_init)
 dis.apply(weights_init)
 gen_optim = torch.optim.Adam(gen.parameters(), lr=GENERATOR_LR, betas=(GENERATOR_BETA, 0.999))
