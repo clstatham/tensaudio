@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 
 from discriminator import DPAM_Discriminator
-from generator import TAAudioGenerator, TAInstParamGenerator
+from generator import TAGenerator, TAInstParamGenerator
 from csoundinterface import CsoundInterface
 from global_constants import *
 from helper import *
@@ -179,12 +179,14 @@ def weights_init(m):
 csi = CsoundInterface()
 
 def get_output_from_params(params, window):
-    params = params.abs().flatten().clone().detach().cpu().numpy()
-    csi.update_params(params[0:N_PARAMS])
+    params = params.clone().detach().cpu().numpy()
+    #window.addstr(4,0, str(params))
+    #window.refresh()
     audio = csi.perform(params, window)
-    #noise = np.random.randn(len(audio)) * 0.001
-    #for i in range(len(audio)):
-    #    audio[i] += noise[i]
+    #noise = np.random.randn(len(audio)) * 0.0001
+    for i in range(len(audio)):
+        if audio[i] == np.inf or audio[i] == np.nan:
+            audio[i] = 0.00001
     return audio
 
 def run_models(window, real):
@@ -221,13 +223,13 @@ def run_models(window, real):
     D_x = output.mean().item()
 
     if GEN_MODE in [5]:
-        noise = generate_input_noise(1)
+        noise = generate_input_noise(TOTAL_SAMPLES_IN)
         params = gen(noise).flatten()
         audio = get_output_from_params(params, window)
         fake = torch.from_numpy(audio).float().cuda()
     else:
         noise = generate_input_noise(TOTAL_SAMPLES_IN)
-        fake = gen(noise)
+        fake = gen(noise, window)
     output = dis(fake).view(-1)
     b_size = output.size(0)
     label = torch.full((b_size,), FAKE_LABEL, dtype=torch.float).cuda()
@@ -261,7 +263,8 @@ def train_on_random(window, i, dirname):
     window.addstr(9,0, "|] Dis Loss:\t\t"+ str(round(float(dis_loss), 4)))
 
     time_diff = time.time() - begin_time
-    window.addstr(10,0, "Models successfully trained in "+ str(round(time_diff, ndigits=2))+ " seconds.")
+    window.addstr(10,0, "Time per iteration: "+ str(round(time_diff, ndigits=2))+ " seconds.")
+    window.refresh()
     # if SAVE_MODEL_EVERY_ITERS > 0 and i % SAVE_MODEL_EVERY_ITERS == 0:
     #     cprint("Saving checkpoints for models...")
     #     torch.save(gen, os.path.join(MODEL_DIR, "gen_ckpts"))
@@ -286,7 +289,7 @@ def train_until_interrupt(window, save_plots=False):
     timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
     dirname = os.path.join(TRAINING_DIR, "training_"+timestamp)
 
-    clear()
+    #clear()
 
     window.addstr(0,0, "="*80)
     window.addstr(1,0, "MODEL TRAINING STARTED AT "+timestamp)
@@ -312,10 +315,17 @@ def train_until_interrupt(window, save_plots=False):
             last_time = time_passed
             if len(diffs) > 2:
                 diffs = diffs[-2:]
-            window.addstr(11,0, "Running time (seconds): "+ str(round(time_passed)))
+            try:
+                window.addstr(11,0, "Running time (seconds): "+ str(round(time_passed)))
+                window.refresh()
+            except curses.error:
+                pass
             if len(diffs) > 0:
                 iters_per_sec = round(len(diffs) / sum(diffs))
-                window.addstr(12,0, "Iterations/sec:"+ str(iters_per_sec))
+                try:
+                    window.addstr(12,0, "Iterations/sec:"+ str(iters_per_sec))
+                except curses.error:
+                    pass
             avg_iters_per_sec = j / time_passed
             if SAVE_EVERY_SECONDS > 0 and avg_iters_per_sec > 0 and j / avg_iters_per_sec % float(SAVE_EVERY_SECONDS) < 1.0 / avg_iters_per_sec:
                 time_since_last_save = -1
@@ -361,10 +371,13 @@ def train_until_interrupt(window, save_plots=False):
     # dirname = os.path.join(MODEL_DIR, "dis_weights", timestamp)
     # os.mkdir(dirname)
     # dis.save_weights(os.path.join(dirname, "dis_weights"))
-    window.addstr(14,0, "="*80)
-    window.addstr(15,0, "MODEL TRAINING FINISHED AT "+str(timestamp))
-    window.addstr(16,0, "="*80)
-    window.refresh()
+    try:
+        window.addstr(14,0, "="*80)
+        window.addstr(15,0, "MODEL TRAINING FINISHED AT "+str(timestamp))
+        window.addstr(16,0, "="*80)
+        window.refresh()
+    except curses.error:
+        pass
     csi.stop()
     #time.sleep(1)
     return i
@@ -388,10 +401,7 @@ if USE_REAL_AUDIO:
 else:
     v_cprint("Created", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
-if GEN_MODE in [5]:
-    gen = TAInstParamGenerator().cuda()
-else:
-    gen = TAAudioGenerator().cuda()
+gen = TAInstParamGenerator().cuda()
 dis = DPAM_Discriminator().cuda()
 gen.apply(weights_init)
 dis.apply(weights_init)
@@ -407,8 +417,7 @@ if __name__ == "__main__":
         data = onestep.generate_one_step()
     else:
         params = onestep.generate_one_step()
-        update_csound_interface(params)
-        data = csi.perform()
+        data = get_output_from_params(params)
     print("Done!")
     amp, phase = my_hilbert(data)
     total_amps.append(amp)

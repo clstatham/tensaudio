@@ -80,6 +80,7 @@ class DPAM_Discriminator(nn.Module):
             real, imag = STFTWithGradients.apply(input1).detach().cuda()
             stft1 = torch.stack((real, imag))
             stft1 = torch.unsqueeze(stft1, 0)
+            stft1 = torch.unsqueeze(stft1, 3)
             out = self.net[0](stft1)
         
         i = 1

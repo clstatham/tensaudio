@@ -378,7 +378,7 @@ class STFTWithGradients(Function):
     @staticmethod
     def forward(ctx, p):
         p_ = p.detach().cpu().numpy()
-        result = librosa.stft(p_.astype('float32'), n_fft=N_FFT)
+        result = np.fft.fft(p_.astype('float32'))
         return p.new((np.real(result), np.imag(result)))
 
     @staticmethod
@@ -396,7 +396,7 @@ class STFTWithGradients(Function):
         data = np.array(data)
         orig_size = data.size//2
         #print(orig_size)
-        result = librosa.istft(data)
+        result = np.fft.ifft(data)
         #print(result.shape)
         result, _ = ensure_size(result, TOTAL_SAMPLES_OUT, channels=1)
         return grad_output.new(result)

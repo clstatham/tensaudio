@@ -1,6 +1,6 @@
 RESOURCES_DIR = "D:\\tensaudio_resources"
 EXAMPLES_DIR = "kicks"
-EXAMPLE_RESULTS_DIR = "kicks"
+EXAMPLE_RESULTS_DIR = "fire"
 INPUTS_DIR = "inputs_kicks"
 
 PLOTS_DIR = "D:\\tensaudio_plots"
@@ -16,7 +16,7 @@ SLEEP_TIME = 0.001
 MAX_ITERS_PER_SEC = 0
 
 # set to 0 to disable periodically generating progress updates
-SAVE_EVERY_SECONDS = 5*60
+SAVE_EVERY_SECONDS = 30
 # set to 0 to disable periodically saving model
 SAVE_MODEL_EVERY_SECONDS = 10*60
 
@@ -34,21 +34,22 @@ GEN_MODE = 5            # 0 = RNN/Hilbert mode
                         # 3 = Conv/Audio mode
                         # 5 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
-SAMPLE_RATE = 8000
+SAMPLE_RATE = 16000
 SUBTYPE = 'PCM_16'
-INPUT_DURATION = 4 / SAMPLE_RATE
-OUTPUT_DURATION = 2
+INPUT_DURATION = 1
+OUTPUT_DURATION = 4
+N_GEN_LAYERS = 8
 N_RNN_LAYERS = 4
-N_PARAMS = 8
+N_PARAMS = 16
 KONTROL_SAMPLES = 32
+TOTAL_PARAM_UPDATES = 4
 DESIRED_PROCESS_UNITS = 1024
 N_PROCESS_LAYERS = 64
 BATCH_OPTIMIZATION_FACTOR = 4000
 GEN_KERNEL_SIZE = 1
-N_TIMESTEPS_PER_KERNEL = SAMPLE_RATE*OUTPUT_DURATION // (GEN_KERNEL_SIZE * 2)
 
-GENERATOR_LR = 0.0001
-GENERATOR_BETA = 0.3
+GENERATOR_LR = 0.001
+GENERATOR_BETA = 0.5
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/dis_ckpts folder or the discsriminator model will give
@@ -81,6 +82,7 @@ if GEN_MODE in [0, 2]:
     N_CHANNELS = 2
 else:
     N_CHANNELS = 1
+N_TIMESTEPS_PER_KERNEL = SAMPLE_RATE*OUTPUT_DURATION // (GEN_KERNEL_SIZE * 2)
 N_BATCHES = TOTAL_SAMPLES_OUT // (N_CHANNELS * GEN_KERNEL_SIZE * N_TIMESTEPS_PER_KERNEL)
 if BATCH_OPTIMIZATION_FACTOR * TOTAL_SAMPLES_OUT % (N_CHANNELS * GEN_KERNEL_SIZE * N_TIMESTEPS_PER_KERNEL) != 0:
     raise ValueError("Could not calculate N_BATCHES: Total length of audio not divisible by", (N_CHANNELS * GEN_KERNEL_SIZE * N_TIMESTEPS_PER_KERNEL))
@@ -90,6 +92,7 @@ if TOTAL_SAMPLES_OUT % N_BATCHES != 0:
 TIMESTEPS_PER_BATCH = N_TIMESTEPS_PER_KERNEL*GEN_KERNEL_SIZE // N_BATCHES
 if N_TIMESTEPS_PER_KERNEL*GEN_KERNEL_SIZE % N_BATCHES != 0:
     raise ValueError("Could not calculate SAMPLES_PER_BATCH: Total kernel samples not divisible by", N_BATCHES)
+
 
 print("v-"*39 + "v")
 print("Total # of input samples:", TOTAL_SAMPLES_IN)
