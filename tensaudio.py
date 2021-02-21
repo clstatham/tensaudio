@@ -16,13 +16,13 @@ import soundfile
 import torch
 import torch.nn as nn
 
+from pgvis import init_gvis
+from csoundinterface import CsoundInterface
 from discriminator import TADiscriminator
 from generator import TAGenerator, TAInstParamGenerator
-from csoundinterface import CsoundInterface
 from global_constants import *
 from helper import *
 from hilbert import *
-from pgvis import G_vis
 
 np.random.seed(int(round(time.time())))
 torch.random.seed()
@@ -34,6 +34,19 @@ total_gen_losses = []
 total_dis_losses = []
 total_real_verdicts = []
 total_fake_verdicts = []
+
+# EXAMPLE_RESULT_FILES = []
+# EXAMPLE_FILES = []
+# INPUT_FILES = []
+# EXAMPLE_RESULTS = []
+# EXAMPLES = []
+# INPUTS = []
+# gen = None
+# dis = None
+# gen_optim = None
+# dis_optim = None
+# onestep = None
+# G_vis = None
 
 def record_amp_phase(amp, phase):
     # total_amps.append(amp)
@@ -179,9 +192,6 @@ def weights_init(m):
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
 
-csi = CsoundInterface()
-current_params = [0.]*N_PARAMS*TOTAL_PARAM_UPDATES
-
 def get_output_from_params(params, window):
     global current_params
     params = params.clone().detach().cpu().numpy()
@@ -306,7 +316,7 @@ def train_until_interrupt(window, save_plots=False):
     if csi.compile():
         raise Exception("ctcsound compile() failed!")
 
-    csi.start()
+    #csi.start()
 
     if MAX_ITERS == 0:
         i = -1
@@ -390,42 +400,64 @@ def train_until_interrupt(window, save_plots=False):
     #time.sleep(1)
     return i
 
-v_cprint("Opening example results...")
-EXAMPLE_RESULT_FILES = open_truncate_pad(EXAMPLE_RESULTS_DIR)
-if USE_REAL_AUDIO:
-    v_cprint("Opening examples...")
-    EXAMPLE_FILES = open_truncate_pad(EXAMPLES_DIR)
-    v_cprint("Opening inputs...")
-    INPUT_FILES = open_truncate_pad(INPUTS_DIR)
-    v_cprint("We have", len(INPUT_FILES), "inputs in the folder.")
-
-print("Resampling, stand by...")
-EXAMPLE_RESULTS = iterate_and_resample(EXAMPLE_RESULT_FILES)
-if USE_REAL_AUDIO:
-    EXAMPLES = iterate_and_resample(EXAMPLE_FILES)
-    INPUTS = iterate_and_resample(INPUT_FILES)
-if USE_REAL_AUDIO:
-    v_cprint("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "Example Result Arrays.")
-else:
-    v_cprint("Created", len(EXAMPLE_RESULTS), "Example Result Arrays.")
-
-gen = TAInstParamGenerator().cuda()
-dis = TADiscriminator().cuda()
-gen.apply(weights_init)
-dis.apply(weights_init)
-gen_optim = torch.optim.Adam(gen.parameters(), lr=GENERATOR_LR, betas=(GENERATOR_BETA, 0.999))
-dis_optim = torch.optim.Adam(dis.parameters(), lr=DISCRIMINATOR_LR, betas=(DISCRIMINATOR_BETA, 0.999))
-
-onestep = OneStep(gen)
 
 if __name__ == "__main__":
+    global EXAMPLE_RESULT_FILES, EXAMPLE_FILES, INPUT_FILES
+    global EXAMPLE_RESULTS, EXAMPLES, INPUTS
+    global gen, dis, gen_optim, dis_optim, onestep
+    print("Opening example results...")
+    EXAMPLE_RESULT_FILES = open_truncate_pad(EXAMPLE_RESULTS_DIR)
+    if USE_REAL_AUDIO:
+        print("Opening examples...")
+        EXAMPLE_FILES = open_truncate_pad(EXAMPLES_DIR)
+        print("Opening inputs...")
+        INPUT_FILES = open_truncate_pad(INPUTS_DIR)
+        print("We have", len(INPUT_FILES), "inputs in the folder.")
+
+    print("Resampling, stand by...")
+    EXAMPLE_RESULTS = iterate_and_resample(EXAMPLE_RESULT_FILES)
+    if USE_REAL_AUDIO:
+        EXAMPLES = iterate_and_resample(EXAMPLE_FILES)
+        INPUTS = iterate_and_resample(INPUT_FILES)
+    if USE_REAL_AUDIO:
+        print("Created", len(EXAMPLES), "Example Arrays and", len(EXAMPLE_RESULTS), "Example Result Arrays.")
+    else:
+        print("Created", len(EXAMPLE_RESULTS), "Example Result Arrays.")
+
+    print("Creating networks...")
+    gen = TAInstParamGenerator().cuda()
+    dis = TADiscriminator().cuda()
+    gen.apply(weights_init)
+    dis.apply(weights_init)
+    gen_optim = torch.optim.Adam(gen.parameters(), lr=GENERATOR_LR, betas=(GENERATOR_BETA, 0.999))
+    dis_optim = torch.optim.Adam(dis.parameters(), lr=DISCRIMINATOR_LR, betas=(DISCRIMINATOR_BETA, 0.999))
+
+    onestep = OneStep(gen)
+
+    print_global_constants()
+    
+    if GEN_MODE in [5]:
+        print("Initializing Visualizer...")
+        G_vis = init_gvis(800, 600)
+        
+
+        print("Creating CSound Interface...")
+        csi = CsoundInterface(G_vis)
+        G_vis.watch_val(csi.param_gen(1))
+        for i in range(10):
+            G_vis.watch_val(csi.param_gen(40+i))
+        current_params = [0.]*N_PARAMS*TOTAL_PARAM_UPDATES
+
+    print("Initialization complete! Starting in 10 seconds...")
+    time.sleep(10)
+
     i = curses.wrapper(train_until_interrupt, True)
     print("Generating...")
-    if USE_REAL_AUDIO:
-        data = onestep.generate_one_step()
-    else:
+    if GEN_MODE in [5]:
         params = onestep.generate_one_step()
         data = get_output_from_params(params, None)
+    else:
+        data = onestep.generate_one_step()
     print("Done!")
     amp, phase = my_hilbert(data)
     total_amps.append(amp)

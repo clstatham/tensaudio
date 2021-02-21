@@ -97,5 +97,8 @@ class PGVisualizer():
             
         pygame.display.flip()
 
-G_vis = PGVisualizer()
-G_vis.init(800, 600)
+G_vis = None
+def init_gvis(width, height):
+    G_vis = PGVisualizer()
+    G_vis.init(width, height)
+    return G_vis

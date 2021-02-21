@@ -3,7 +3,6 @@ import ctcsound
 import torch
 import librosa
 from global_constants import *
-from pgvis import G_vis
 
 # createChannel and ChannelUpdater credit to:
 # Steven Yi <stevenyi@gmail.com>
@@ -25,10 +24,11 @@ class ChannelUpdater(object):
         self.cs.setControlChannel(self.channelName, self.updater())
 
 class CsoundInterface():
-    def __init__(self):
+    def __init__(self, vis):
         self.params_sec = OUTPUT_DURATION/TOTAL_PARAM_UPDATES
         self.secs_param = TOTAL_PARAM_UPDATES/OUTPUT_DURATION
         self.c = ctcsound.Csound()
+        self.vis = vis
         #self.t = ctcsound.CsoundPerformanceThread(self.c.csound())
         #self.c.createMessageBuffer(True)
         #self.c.SetOption("-odac")
@@ -41,9 +41,6 @@ class CsoundInterface():
         ]
 
         #for i in range(N_PARAMS):
-        G_vis.watch_val(self.param_gen(1))
-        for i in range(10):
-            G_vis.watch_val(self.param_gen(40+i))
         
         
         self.gens = """\n
@@ -94,7 +91,7 @@ class CsoundInterface():
         for chn in self.channels:
             chn.update()
 
-        #G_vis.reset()
+        #self.vis.reset()
         i = 1
         st = [0,0]
         tim = ctcsound.RtClock()
@@ -226,8 +223,8 @@ class CsoundInterface():
             raise ValueError("Incorrect number of parameters!")
         for i in range(N_PARAMS-2):
             self.set_param(i+1, params[i])
-        G_vis.update_vals()
-        G_vis.update_display()
+        self.vis.update_vals()
+        self.vis.update_display()
     
     def update_score(self):
         out = """\n

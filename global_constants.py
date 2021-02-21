@@ -99,30 +99,31 @@ if N_TIMESTEPS_PER_KERNEL*GEN_KERNEL_SIZE % N_BATCHES != 0:
     raise ValueError("Could not calculate SAMPLES_PER_BATCH: Total kernel samples not divisible by", N_BATCHES)
 
 
-print("v-"*39 + "v")
-print("Total # of input samples:", TOTAL_SAMPLES_IN)
-print("Timesteps per kernel:", N_TIMESTEPS_PER_KERNEL)
-print("Batches per layer:", N_BATCHES)
-print("Samples per batch:", SAMPLES_PER_BATCH)
-print("Timesteps per batch:", TIMESTEPS_PER_BATCH)
-print("Number of channels:", N_CHANNELS)
-# if GEN_MODE == 1:
-#     cprint("Will create", N_RNN_LAYERS, "layers of", N_UNITS, "units.")
-# elif GEN_MODE == 0:
-#     cprint("Will create 1 Pre-Dense layer of", SAMPLES_PER_BATCH, "filters.")    
-#     if N_PRE_DENSE_LAYERS > 1:
-#         cprint("Will create", N_PRE_DENSE_LAYERS-1, "Pre-Dense layers of", N_UNITS*N_TIMESTEPS, "filters.")
-#     cprint("Will create", N_DENSE_LAYERS-1, "Dense layers of", SAMPLES_PER_BATCH, "units.")
-#     cprint("Will create 1 Dense layer of", SAMPLES_PER_BATCH, "units.")
-#     if N_POST_DENSE_LAYERS > 1:
-#         for i in range(1,N_POST_DENSE_LAYERS):
-#                 n_filts = i*N_POST_DENSE_FILTERS
-#                 cprint("Will create 1 Post-Dense layer of", n_filts, "filters.")
-#     else:
-#         cprint("Will create 1 Post-Dense layer of", N_UNITS*N_TIMESTEPS//20, "filters.")
-output_samples = N_BATCHES*N_CHANNELS*N_TIMESTEPS_PER_KERNEL*GEN_KERNEL_SIZE
-print("Total # of output samples:", output_samples)
-print("^-"*39 + "^")
+def print_global_constants():
+    print("v-"*39 + "v")
+    print("Total # of input samples:", TOTAL_SAMPLES_IN)
+    print("Timesteps per kernel:", N_TIMESTEPS_PER_KERNEL)
+    print("Batches per layer:", N_BATCHES)
+    print("Samples per batch:", SAMPLES_PER_BATCH)
+    print("Timesteps per batch:", TIMESTEPS_PER_BATCH)
+    print("Number of channels:", N_CHANNELS)
+    # if GEN_MODE == 1:
+    #     cprint("Will create", N_RNN_LAYERS, "layers of", N_UNITS, "units.")
+    # elif GEN_MODE == 0:
+    #     cprint("Will create 1 Pre-Dense layer of", SAMPLES_PER_BATCH, "filters.")    
+    #     if N_PRE_DENSE_LAYERS > 1:
+    #         cprint("Will create", N_PRE_DENSE_LAYERS-1, "Pre-Dense layers of", N_UNITS*N_TIMESTEPS, "filters.")
+    #     cprint("Will create", N_DENSE_LAYERS-1, "Dense layers of", SAMPLES_PER_BATCH, "units.")
+    #     cprint("Will create 1 Dense layer of", SAMPLES_PER_BATCH, "units.")
+    #     if N_POST_DENSE_LAYERS > 1:
+    #         for i in range(1,N_POST_DENSE_LAYERS):
+    #                 n_filts = i*N_POST_DENSE_FILTERS
+    #                 cprint("Will create 1 Post-Dense layer of", n_filts, "filters.")
+    #     else:
+    #         cprint("Will create 1 Post-Dense layer of", N_UNITS*N_TIMESTEPS//20, "filters.")
+    output_samples = N_BATCHES*N_CHANNELS*N_TIMESTEPS_PER_KERNEL*GEN_KERNEL_SIZE
+    print("Total # of output samples:", output_samples)
+    print("^-"*39 + "^")
 
 def v_cprint(*s):
     if VERBOSITY_LEVEL >= 1:
