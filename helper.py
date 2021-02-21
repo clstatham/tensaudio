@@ -374,7 +374,7 @@ def write_normalized_audio_to_disk(a, fn):
   scaled = np.int16(normalize_audio(a) * 32767)
   soundfile.write(fn, scaled, SAMPLE_RATE, SUBTYPE)
 
-class STFTWithGradients(Function):
+class FFTWithGradients(Function):
     @staticmethod
     def forward(ctx, p):
         p_ = p.detach().cpu().numpy()
@@ -401,11 +401,11 @@ class STFTWithGradients(Function):
         result, _ = ensure_size(result, TOTAL_SAMPLES_OUT, channels=1)
         return grad_output.new(result)
 
-class InverseSTFTWithGradients(Function):
+class InverseFFTWithGradients(Function):
     @staticmethod
     def forward(ctx, p):
         p_ = p.detach().cpu().numpy()
-        result = librosa.istft(p_)
+        result = np.fft.ifft(p_)
         return p.new((np.real(result), np.imag(result)))
 
     @staticmethod
@@ -413,5 +413,5 @@ class InverseSTFTWithGradients(Function):
         if grad_output is None:
           return None, None
         numpy_go = grad_output.cpu().numpy()
-        result = librosa.stft(numpy_go, n_fft=N_FFT)
+        result = np.fft.fft(numpy_go)
         return grad_output.new((np.real(result), np.imag(result)))

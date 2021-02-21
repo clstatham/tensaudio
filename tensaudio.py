@@ -186,8 +186,9 @@ def get_output_from_params(params, window):
     global current_params
     params = params.clone().detach().cpu().numpy()
     current_params = params
-    #window.addstr(3,0, str(params.shape[0]))
-    window.refresh()
+    #if window is not None:
+        #window.addstr(3,0, str(params.shape[0]))
+        #window.refresh()
     audio = csi.perform(params, window)
     #noise = np.random.randn(len(audio)) * 0.0001
     for i in range(len(audio)):
@@ -424,7 +425,7 @@ if __name__ == "__main__":
         data = onestep.generate_one_step()
     else:
         params = onestep.generate_one_step()
-        data = get_output_from_params(params)
+        data = get_output_from_params(params, None)
     print("Done!")
     amp, phase = my_hilbert(data)
     total_amps.append(amp)

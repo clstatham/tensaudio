@@ -32,40 +32,11 @@ class TADiscriminator(nn.Module):
         self.net.append(nn.Sigmoid())
 
         self.net = nn.ModuleList(self.net)
-
-        # self.ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=self.optimizer, net=self)
-        # self.manager = tf.train.CheckpointManager(self.ckpt, os.path.join(MODEL_DIR, "dis_ckpts"), max_to_keep=1)
-        
-        # if self.manager.latest_checkpoint:
-        #     self.ckpt.restore(self.manager.latest_checkpoint)
-        #     cprint("Restored DPAM from {}".format(self.manager.latest_checkpoint))
-        # else:
-        #     cprint("Initializing DPAM from scratch.")
     
     def criterion(self, label, output):
         l = self.loss(torch.unsqueeze(output, 0), torch.unsqueeze(label, 0))
         l = F.relu(l)
         return l
-
-    def layer_channels_by_index(self, i):
-        return np.max((1, self.base_channels * (i)))
-
-    def call_ln(self, inp):
-        out = inp.float()
-        i = 1
-        for layer in self.ln_layers:
-            n_channels = self.layer_channels_by_index(i)
-            out = layer(out)
-            i += 1
-        return out
-
-    def featureloss_batch(self, target, current):
-        feat_current = self.call_ln(current)
-        feat_target = self.call_ln(target)
-        c_sum = torch.sum(torch.abs(feat_current))
-        t_sum = torch.sum(torch.abs(feat_target))
-        loss_result=F.l1_loss(input=c_sum, target=t_sum)
-        return loss_result
 
     def forward(self, input1):
         if type(input1) != torch.Tensor:
@@ -77,7 +48,7 @@ class TADiscriminator(nn.Module):
             hilb = torch.unsqueeze(hilb, 3)
             out = self.net[0](hilb)
         elif DIS_MODE == 1:
-            real, imag = STFTWithGradients.apply(input1).detach().cuda()
+            real, imag = FFTWithGradients.apply(input1).detach().cuda()
             stft1 = torch.stack((real, imag))
             stft1 = torch.unsqueeze(stft1, 0)
             stft1 = torch.unsqueeze(stft1, 3)

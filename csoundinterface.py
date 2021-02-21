@@ -112,32 +112,33 @@ class CsoundInterface():
                     continue
             param_slice = self.scale_params(param_slice)
             self.update_params(param_slice)
-            try:
-                window.addstr(14,0, "Current Parameters:")
-                window.move(15,0)
-                window.clrtoeol()
-                #window.move(16,0)
-                #window.clrtoeol()
-                window.addstr(15,0, str(round(self.params[0]   ))+"\t")
-                #                     str(round(self.params[1]   ))+"\t"+
-                #                     str(round(self.params[2]   ))+"\t"+
-                #                     str(round(self.params[3], 2))+"\t")
-                # window.addstr(16,0, str(round(self.params[4], 2))+"\t"+
-                #                     str(round(self.params[5], 2))+"\t"+
-                #                     str(round(self.params[6], 2))+"\t"+
-                #                     str(round(self.params[7], 2))+"\t")
-                # window.addstr(15,40,str(round(self.params[8], 2))+"\t"+
-                #                     str(round(self.params[9], 2))+"\t"+
-                #                     str(round(self.params[10], 2))+"\t"+
-                #                     str(round(self.params[11], 2))+"\t")
-                # window.addstr(16,40,str(round(self.params[12], 2))+"\t"+
-                #                     str(round(self.params[13], 2))+"\t"+
-                #                     str(round(self.params[14], 2))+"\t"+
-                #                     str(round(self.params[15], 2))+"\t")
-                window.refresh()
-                time.sleep(0.001)
-            except curses.error:
-                pass
+            if window is not None:
+                try:
+                    window.addstr(14,0, "Current Parameters:")
+                    window.move(15,0)
+                    window.clrtoeol()
+                    #window.move(16,0)
+                    #window.clrtoeol()
+                    window.addstr(15,0, str(round(self.params[0]   ))+"\t")
+                    #                     str(round(self.params[1]   ))+"\t"+
+                    #                     str(round(self.params[2]   ))+"\t"+
+                    #                     str(round(self.params[3], 2))+"\t")
+                    # window.addstr(16,0, str(round(self.params[4], 2))+"\t"+
+                    #                     str(round(self.params[5], 2))+"\t"+
+                    #                     str(round(self.params[6], 2))+"\t"+
+                    #                     str(round(self.params[7], 2))+"\t")
+                    # window.addstr(15,40,str(round(self.params[8], 2))+"\t"+
+                    #                     str(round(self.params[9], 2))+"\t"+
+                    #                     str(round(self.params[10], 2))+"\t"+
+                    #                     str(round(self.params[11], 2))+"\t")
+                    # window.addstr(16,40,str(round(self.params[12], 2))+"\t"+
+                    #                     str(round(self.params[13], 2))+"\t"+
+                    #                     str(round(self.params[14], 2))+"\t"+
+                    #                     str(round(self.params[15], 2))+"\t")
+                    window.refresh()
+                    time.sleep(0.001)
+                except curses.error:
+                    pass
 
             for chn in self.channels:
                 chn.update()

@@ -10,7 +10,7 @@ MODEL_DIR = "D:\\tensaudio_models"
 
 # set to 0 to run until Ctrl+C is input in the terminal
 MAX_ITERS = 0
-RUN_FOR_SEC = 0
+RUN_FOR_SEC = 90
 
 SLEEP_TIME = 0.001
 MAX_ITERS_PER_SEC = 0
@@ -38,16 +38,20 @@ SAMPLE_RATE = 22000
 SUBTYPE = 'PCM_16'
 INPUT_DURATION = 4 / SAMPLE_RATE
 OUTPUT_DURATION = 3
-N_GEN_LAYERS = 2
+GEN_KERNEL_SIZE = 1
+# RNN mode only
 N_RNN_LAYERS = 4
+# CSound mode only
+N_GEN_LAYERS = 2
 N_PARAMS = 51
 KONTROL_SAMPLES = 8
 TOTAL_PARAM_UPDATES = 1
+# Non-CSound mode only
 DESIRED_PROCESS_UNITS = 1024
 N_PROCESS_LAYERS = 64
 BATCH_OPTIMIZATION_FACTOR = 4000
-GEN_KERNEL_SIZE = 1
 
+# Hyperparameters
 GENERATOR_LR = 0.001
 GENERATOR_BETA = 0.5
 
@@ -55,12 +59,13 @@ GENERATOR_BETA = 0.5
 # MODEL_DIR/dis_ckpts folder or the discsriminator model will give
 # an error!
 DIS_MODE = 1            # 0 = Hilbert mode
-                        # 1 = STFT mode
+                        # 1 = FFT mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
-N_FFT = 32
 N_DIS_LAYERS = 8
 DIS_KERNEL_SIZE = 1
+
+#Hyperparameters
 DISCRIMINATOR_LR = 0.0002
 DISCRIMINATOR_BETA = 0.3
 
