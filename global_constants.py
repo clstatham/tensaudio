@@ -1,6 +1,6 @@
 RESOURCES_DIR = "D:\\tensaudio_resources"
-EXAMPLES_DIR = "kicks"
-EXAMPLE_RESULTS_DIR = "fire"
+EXAMPLES_DIR = "fire"
+EXAMPLE_RESULTS_DIR = "synthloops"
 INPUTS_DIR = "inputs_kicks"
 
 PLOTS_DIR = "D:\\tensaudio_plots"
@@ -16,7 +16,7 @@ SLEEP_TIME = 0.001
 MAX_ITERS_PER_SEC = 0
 
 # set to 0 to disable periodically generating progress updates
-SAVE_EVERY_SECONDS = 30
+SAVE_EVERY_SECONDS = 5*60
 # set to 0 to disable periodically saving model
 SAVE_MODEL_EVERY_SECONDS = 10*60
 
@@ -34,15 +34,15 @@ GEN_MODE = 5            # 0 = RNN/Hilbert mode
                         # 3 = Conv/Audio mode
                         # 5 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 22000
 SUBTYPE = 'PCM_16'
-INPUT_DURATION = 1
-OUTPUT_DURATION = 4
-N_GEN_LAYERS = 8
+INPUT_DURATION = 4 / SAMPLE_RATE
+OUTPUT_DURATION = 0.3333
+N_GEN_LAYERS = 2
 N_RNN_LAYERS = 4
-N_PARAMS = 16
-KONTROL_SAMPLES = 32
-TOTAL_PARAM_UPDATES = 4
+N_PARAMS = 51
+KONTROL_SAMPLES = 8
+TOTAL_PARAM_UPDATES = 1
 DESIRED_PROCESS_UNITS = 1024
 N_PROCESS_LAYERS = 64
 BATCH_OPTIMIZATION_FACTOR = 4000

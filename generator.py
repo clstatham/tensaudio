@@ -25,7 +25,7 @@ class TAInstParamGenerator(nn.Module):
 
         self.n_layers = N_GEN_LAYERS
         self.ksz = GEN_KERNEL_SIZE
-        self.ndf = N_PARAMS * TOTAL_PARAM_UPDATES
+        self.ndf = N_PARAMS * (5+TOTAL_PARAM_UPDATES)
 
         self.layers = [nn.ConvTranspose1d(TOTAL_SAMPLES_IN, self.ndf, self.ksz)]
         i = 0
@@ -36,7 +36,7 @@ class TAInstParamGenerator(nn.Module):
             #self.layers.append(nn.BatchNorm1d(self.ndf*n))
             self.layers.append(nn.Flatten())
             self.layers.append(nn.Linear(self.ndf, self.ndf))
-            self.layers.append(nn.LeakyReLU(0.2, inplace=True))
+            #self.layers.append(nn.LeakyReLU(0.2, inplace=True))
             i += 1
 
         #self.layers.append(nn.Conv1d(self.ndf, self.ndf//2, self.ksz, 1, 0, bias=False))
@@ -54,18 +54,14 @@ class TAInstParamGenerator(nn.Module):
         out = self.layers[0](inp)
         i = 1
         for layer in self.layers[1:]:
-            #window.addstr(4,10, str(i))
-            #window.addstr(4,0, str(out.detach().cpu().numpy()[:4]))
-            #window.addstr(4,80, str(out.shape))
-            #window.refresh()
             out = layer(out)
-            #print(i)
-            #print(str(out.detach().cpu().numpy()))
             i += 1
-        # out = out.view(out.size(0), -1)
-        # out -= out.min(1, keepdim=True)[0]
-        # out /= out.max(1, keepdim=True)[0]
+        out = out.view(out.size(0), -1)
+        out -= out.min(1, keepdim=True)[0]
+        out /= out.max(1, keepdim=True)[0]
         out = out.view(self.ndf)
+        out = out[N_PARAMS*5:] # for some reason the first few sets of params are always 0,
+                             # so we generate 5 more than we need and start at the 6th
         #print(out.shape)
         return out
 

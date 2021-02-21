@@ -8,6 +8,7 @@ import ctcsound
 import librosa
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from matplotlib import animation
 import numpy as np
 import scipy.io.wavfile
 import six
@@ -21,6 +22,7 @@ from csoundinterface import CsoundInterface
 from global_constants import *
 from helper import *
 from hilbert import *
+from pgvis import G_vis
 
 np.random.seed(int(round(time.time())))
 
@@ -177,11 +179,14 @@ def weights_init(m):
         nn.init.constant_(m.bias.data, 0)
 
 csi = CsoundInterface()
+current_params = [0.]*N_PARAMS*TOTAL_PARAM_UPDATES
 
 def get_output_from_params(params, window):
+    global current_params
     params = params.clone().detach().cpu().numpy()
-    #window.addstr(4,0, str(params))
-    #window.refresh()
+    current_params = params
+    #window.addstr(3,0, str(params.shape[0]))
+    window.refresh()
     audio = csi.perform(params, window)
     #noise = np.random.randn(len(audio)) * 0.0001
     for i in range(len(audio)):
@@ -307,6 +312,7 @@ def train_until_interrupt(window, save_plots=False):
         if RUN_FOR_SEC > 0 and time_passed > RUN_FOR_SEC:
             break
         try:
+            G_vis.handle_events()
             window.addstr(4,0, "*"*40)
             window.addstr(5,0, "Initiating iteration #"+str(j+1))
             secs_per_iter = train_on_random(window, j, dirname)
