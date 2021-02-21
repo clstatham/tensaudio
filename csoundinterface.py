@@ -117,24 +117,67 @@ class CsoundInterface():
                     window.addstr(14,0, "Current Parameters:")
                     window.move(15,0)
                     window.clrtoeol()
-                    #window.move(16,0)
-                    #window.clrtoeol()
-                    window.addstr(15,0, str(round(self.params[0]   ))+"\t")
-                    #                     str(round(self.params[1]   ))+"\t"+
-                    #                     str(round(self.params[2]   ))+"\t"+
-                    #                     str(round(self.params[3], 2))+"\t")
-                    # window.addstr(16,0, str(round(self.params[4], 2))+"\t"+
-                    #                     str(round(self.params[5], 2))+"\t"+
-                    #                     str(round(self.params[6], 2))+"\t"+
-                    #                     str(round(self.params[7], 2))+"\t")
-                    # window.addstr(15,40,str(round(self.params[8], 2))+"\t"+
-                    #                     str(round(self.params[9], 2))+"\t"+
-                    #                     str(round(self.params[10], 2))+"\t"+
-                    #                     str(round(self.params[11], 2))+"\t")
-                    # window.addstr(16,40,str(round(self.params[12], 2))+"\t"+
-                    #                     str(round(self.params[13], 2))+"\t"+
-                    #                     str(round(self.params[14], 2))+"\t"+
-                    #                     str(round(self.params[15], 2))+"\t")
+                    window.move(16,0)
+                    window.clrtoeol()
+                    window.move(17,0)
+                    window.clrtoeol()
+                    window.move(18,0)
+                    window.clrtoeol()
+                    window.move(19,0)
+                    window.clrtoeol()
+                    window.addstr(15,0, str(round(self.params[0]   ))+"\t"+
+                                        str(round(self.params[1], 2))+"\t"+
+                                        str(round(self.params[2], 2))+"\t"+
+                                        str(round(self.params[3], 2))+"\t"+
+                                        str(round(self.params[4], 2))+"\t"+
+                                        str(round(self.params[5], 2))+"\t"+
+                                        str(round(self.params[6], 2))+"\t"+
+                                        str(round(self.params[7], 2))+"\t"+
+                                        str(round(self.params[8], 2))+"\t"+
+                                        str(round(self.params[9], 2))+"\t")
+                    window.addstr(16,0, str(round(self.params[10], 2))+"\t"+
+                                        str(round(self.params[11], 2))+"\t"+
+                                        str(round(self.params[12], 2))+"\t"+
+                                        str(round(self.params[13], 2))+"\t"+
+                                        str(round(self.params[14], 2))+"\t"+
+                                        str(round(self.params[15], 2))+"\t"+
+                                        str(round(self.params[16], 2))+"\t"+
+                                        str(round(self.params[17], 2))+"\t"+
+                                        str(round(self.params[18], 2))+"\t"+
+                                        str(round(self.params[19], 2))+"\t")
+                    window.addstr(17,0, str(round(self.params[20], 2))+"\t"+
+                                        str(round(self.params[21], 2))+"\t"+
+                                        str(round(self.params[22], 2))+"\t"+
+                                        str(round(self.params[23], 2))+"\t"+
+                                        str(round(self.params[24], 2))+"\t"+
+                                        str(round(self.params[25], 2))+"\t"+
+                                        str(round(self.params[26], 2))+"\t"+
+                                        str(round(self.params[27], 2))+"\t"+
+                                        str(round(self.params[28], 2))+"\t"+
+                                        str(round(self.params[29], 2))+"\t")
+                    window.addstr(18,0, str(round(self.params[30], 2))+"\t"+
+                                        str(round(self.params[31], 2))+"\t"+
+                                        str(round(self.params[32], 2))+"\t"+
+                                        str(round(self.params[33], 2))+"\t"+
+                                        str(round(self.params[34], 2))+"\t"+
+                                        str(round(self.params[35], 2))+"\t"+
+                                        str(round(self.params[36], 2))+"\t"+
+                                        str(round(self.params[37], 2))+"\t"+
+                                        str(round(self.params[38], 2))+"\t"+
+                                        str(round(self.params[39], 2))+"\t")
+                    window.addstr(19,0, str(round(self.params[40], 2))+"\t"+
+                                        str(round(self.params[41], 2))+"\t"+
+                                        str(round(self.params[42], 2))+"\t"+
+                                        str(round(self.params[43], 2))+"\t"+
+                                        str(round(self.params[44], 2))+"\t"+
+                                        str(round(self.params[45], 2))+"\t"+
+                                        str(round(self.params[46], 2))+"\t"+
+                                        str(round(self.params[47], 2))+"\t"+
+                                        str(round(self.params[48], 2))+"\t"+
+                                        str(round(self.params[49], 2))+"\t")
+
+                    
+                    
                     window.refresh()
                     time.sleep(0.001)
                 except curses.error:
