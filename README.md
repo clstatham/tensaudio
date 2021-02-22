@@ -1,5 +1,5 @@
 # tensaudio
-Experiments with TensorFlow and audio.
+Experiments with PyTorch and audio.
 
 Setup:
 pip -r REQUIREMENTS.txt
