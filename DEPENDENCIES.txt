@@ -1,0 +1,9 @@
+ctcsound
+torch
+soundfile
+six
+numpy
+scipy
+matplotlib
+pygame
+librosa

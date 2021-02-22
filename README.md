@@ -1,5 +1,9 @@
 # tensaudio
- Experiments with TensorFlow and audio.
+Experiments with TensorFlow and audio.
+
+Setup:
+pip -r REQUIREMENTS.txt
+Also have the NVIDIA CUDA SDK installed with an NVIDIA graphics card.
 
 Change the paths defined in global_constants.py before running!
 
