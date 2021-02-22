@@ -10,13 +10,13 @@ MODEL_DIR = "D:\\tensaudio_models"
 
 # set to 0 to run until Ctrl+C is input in the terminal
 MAX_ITERS = 0
-RUN_FOR_SEC = 90
+RUN_FOR_SEC = 0
 
 SLEEP_TIME = 0.001
 MAX_ITERS_PER_SEC = 0
 
 # set to 0 to disable periodically generating progress updates
-SAVE_EVERY_SECONDS = 10
+SAVE_EVERY_SECONDS = 60
 # set to 0 to disable periodically saving model
 SAVE_MODEL_EVERY_SECONDS = 10*60
 
@@ -43,9 +43,9 @@ GEN_KERNEL_SIZE = 1
 N_RNN_LAYERS = 4
 # CSound mode only
 N_GEN_LAYERS = 2
-N_PARAMS = 53
-KONTROL_SAMPLES = 8
-TOTAL_PARAM_UPDATES = 1
+N_PARAMS = 64
+KONTROL_SAMPLES = 32
+TOTAL_PARAM_UPDATES = 128
 # Non-CSound mode only
 DESIRED_PROCESS_UNITS = 1024
 N_PROCESS_LAYERS = 64
@@ -97,7 +97,7 @@ if TOTAL_SAMPLES_OUT % N_BATCHES != 0:
 TIMESTEPS_PER_BATCH = N_TIMESTEPS_PER_KERNEL*GEN_KERNEL_SIZE // N_BATCHES
 if N_TIMESTEPS_PER_KERNEL*GEN_KERNEL_SIZE % N_BATCHES != 0:
     raise ValueError("Could not calculate SAMPLES_PER_BATCH: Total kernel samples not divisible by", N_BATCHES)
-
+KONTROL_SECONDS = KONTROL_SAMPLES/SAMPLE_RATE
 
 def print_global_constants():
     print("v-"*39 + "v")

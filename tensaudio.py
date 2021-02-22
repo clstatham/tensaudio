@@ -317,10 +317,6 @@ def train_until_interrupt(window, save_plots=False):
     window.addstr(1,0, "MODEL TRAINING STARTED AT "+timestamp)
     window.addstr(2,0, "="*80)
 
-    #csi.create_gen()
-    if csi.compile():
-        raise Exception("ctcsound compile() failed!")
-
     #csi.start()
 
     if MAX_ITERS == 0:
@@ -401,7 +397,6 @@ def train_until_interrupt(window, save_plots=False):
         window.refresh()
     except curses.error:
         pass
-    csi.stop()
     #time.sleep(1)
     return i
 
@@ -448,9 +443,12 @@ if __name__ == "__main__":
 
         print("Creating CSound Interface...")
         csi = CsoundInterface(G_vis)
+        result = csi.compile()
+        if result != 0:
+            raise RuntimeError("CSound compilation failed!")
         G_vis.watch_val(csi.param_gen(1))
-        for i in range(10):
-            G_vis.watch_val(csi.param_gen(40+i))
+        #for i in range(10):
+        #    G_vis.watch_val(csi.param_gen(40+i))
         current_params = [0.]*N_PARAMS*TOTAL_PARAM_UPDATES
 
     print("Initialization complete! Starting in 10 seconds...")
@@ -464,6 +462,7 @@ if __name__ == "__main__":
     else:
         data = onestep.generate_one_step()
     print("Done!")
+    csi.stop()
     amp, phase = my_hilbert(data)
     total_amps.append(amp)
     total_phases.append(phase)
