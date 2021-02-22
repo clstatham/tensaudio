@@ -20,8 +20,13 @@ class ChannelUpdater(object):
         self.channelName = channelName
         createChannel(cs, channelName)
 
+    def get(self):
+        result = self.cs.controlChannel(self.channelName)
+        if not result[1]:
+            return result[0]
+    
     def update(self):
-        self.cs.setControlChannel(self.channelName, self.updater())
+        self.cs.setControlChannel(self.channelName, next(self.updater))
 
 class CsoundInterface():
     def __init__(self, vis):
@@ -31,27 +36,27 @@ class CsoundInterface():
         self.vis = vis
         #self.t = ctcsound.CsoundPerformanceThread(self.c.csound())
         #self.c.createMessageBuffer(True)
-        #self.c.SetOption("-odac")
-        self.c.setOption("-b "+str(TOTAL_SAMPLES_OUT))
+        #self.c.setOption("-n")
+        #self.c.setOption("-+rtmidi=mme")
+        self.c.setOption("-+rtaudio=mme")
+        self.c.setOption("-odac1")
+        self.c.setOption("-M0")
+        #self.c.setOption("-b "+str(512))
         self.total_instruments = 1
         self.total_gens = 1
         self.params = [1.] * N_PARAMS
         self.channels = [
-            ChannelUpdater(self.c, "param"+str(i), lambda: self.get_param(i)) for i in range(1, N_PARAMS+1)
+            ChannelUpdater(self.c, "param"+str(i), self.yield_param(i)) for i in range(1, N_PARAMS+1)
         ]
 
-        #for i in range(N_PARAMS):
-        
-        
         self.gens = """\n
         \n"""
-        self.csinstruments = """\n
+        self.csinstruments = """
         sr="""+str(SAMPLE_RATE)+"""
         ksmps="""+str(KONTROL_SAMPLES)+"""
         nchnls="""+str(1)+"""
         0dbfs=1
-        
-        """+FM_SYNTH
+        \n"""+FM_SYNTH
         
         
     
@@ -59,6 +64,9 @@ class CsoundInterface():
         self.params[num-1] = value
     def get_param(self, num):
         return self.params[num-1]
+    def yield_param(self, num):
+        while True:
+            yield self.params[num-1]
 
     def param_gen(self, num):
         while True:
@@ -78,15 +86,20 @@ class CsoundInterface():
         #print(orc)
         return self.c.compileOrc(orc)
 
-    def perform(self, params, window):
+    def update_channels(self):
         for chn in self.channels:
             chn.update()
+
+    def perform(self, params, window):
+        
         out = np.array([])
         done = False
         last_params = params[0:N_PARAMS]
         self.update_params(last_params)
+        self.update_channels()
         self.c.reset()
         self.compile()
+        self.c.start()
 
         for chn in self.channels:
             chn.update()
@@ -109,6 +122,7 @@ class CsoundInterface():
                     continue
             param_slice = self.scale_params(param_slice)
             self.update_params(param_slice)
+            self.update_channels()
             if window is not None:
                 try:
                     window.addstr(14,0, "Current Parameters:")
@@ -122,72 +136,90 @@ class CsoundInterface():
                     window.clrtoeol()
                     window.move(19,0)
                     window.clrtoeol()
-                    window.addstr(15,0, str(round(self.params[0]   ))+"\t"+
-                                        str(round(self.params[1], 2))+"\t"+
-                                        str(round(self.params[2], 2))+"\t"+
-                                        str(round(self.params[3], 2))+"\t"+
-                                        str(round(self.params[4], 2))+"\t"+
-                                        str(round(self.params[5], 2))+"\t"+
-                                        str(round(self.params[6], 2))+"\t"+
-                                        str(round(self.params[7], 2))+"\t"+
-                                        str(round(self.params[8], 2))+"\t"+
-                                        str(round(self.params[9], 2))+"\t")
-                    window.addstr(16,0, str(round(self.params[10], 2))+"\t"+
-                                        str(round(self.params[11], 2))+"\t"+
-                                        str(round(self.params[12], 2))+"\t"+
-                                        str(round(self.params[13], 2))+"\t"+
-                                        str(round(self.params[14], 2))+"\t"+
-                                        str(round(self.params[15], 2))+"\t"+
-                                        str(round(self.params[16], 2))+"\t"+
-                                        str(round(self.params[17], 2))+"\t"+
-                                        str(round(self.params[18], 2))+"\t"+
-                                        str(round(self.params[19], 2))+"\t")
-                    window.addstr(17,0, str(round(self.params[20], 2))+"\t"+
-                                        str(round(self.params[21], 2))+"\t"+
-                                        str(round(self.params[22], 2))+"\t"+
-                                        str(round(self.params[23], 2))+"\t"+
-                                        str(round(self.params[24], 2))+"\t"+
-                                        str(round(self.params[25], 2))+"\t"+
-                                        str(round(self.params[26], 2))+"\t"+
-                                        str(round(self.params[27], 2))+"\t"+
-                                        str(round(self.params[28], 2))+"\t"+
-                                        str(round(self.params[29], 2))+"\t")
-                    window.addstr(18,0, str(round(self.params[30], 2))+"\t"+
-                                        str(round(self.params[31], 2))+"\t"+
-                                        str(round(self.params[32], 2))+"\t"+
-                                        str(round(self.params[33], 2))+"\t"+
-                                        str(round(self.params[34], 2))+"\t"+
-                                        str(round(self.params[35], 2))+"\t"+
-                                        str(round(self.params[36], 2))+"\t"+
-                                        str(round(self.params[37], 2))+"\t"+
-                                        str(round(self.params[38], 2))+"\t"+
-                                        str(round(self.params[39], 2))+"\t")
-                    window.addstr(19,0, str(round(self.params[40], 2))+"\t"+
-                                        str(round(self.params[41], 2))+"\t"+
-                                        str(round(self.params[42], 2))+"\t"+
-                                        str(round(self.params[43], 2))+"\t"+
-                                        str(round(self.params[44], 2))+"\t"+
-                                        str(round(self.params[45], 2))+"\t"+
-                                        str(round(self.params[46], 2))+"\t"+
-                                        str(round(self.params[47], 2))+"\t"+
-                                        str(round(self.params[48], 2))+"\t"+
-                                        str(round(self.params[49], 2))+"\t")
+                except curses.error:
+                    pass
+                try:
+                    window.addstr(15,0, str(round(self.channels[0].get()   ))+"\t"+
+                                        str(round(self.channels[1].get(), 2))+"\t"+
+                                        str(round(self.channels[2].get(), 2))+"\t"+
+                                        str(round(self.channels[3].get(), 2))+"\t"+
+                                        str(round(self.channels[4].get(), 2))+"\t"+
+                                        str(round(self.channels[5].get(), 2))+"\t"+
+                                        str(round(self.channels[6].get(), 2))+"\t"+
+                                        str(round(self.channels[7].get(), 2))+"\t"+
+                                        str(round(self.channels[8].get(), 2))+"\t"+
+                                        str(round(self.channels[9].get(), 2))+"\t")
+                except curses.error:
+                    pass
+                try:
+                    window.addstr(16,0, str(round(self.channels[10].get(), 2))+"\t"+
+                                        str(round(self.channels[11].get(), 2))+"\t"+
+                                        str(round(self.channels[12].get(), 2))+"\t"+
+                                        str(round(self.channels[13].get(), 2))+"\t"+
+                                        str(round(self.channels[14].get(), 2))+"\t"+
+                                        str(round(self.channels[15].get(), 2))+"\t"+
+                                        str(round(self.channels[16].get(), 2))+"\t"+
+                                        str(round(self.channels[17].get(), 2))+"\t"+
+                                        str(round(self.channels[18].get(), 2))+"\t"+
+                                        str(round(self.channels[19].get(), 2))+"\t")
+                except curses.error:
+                    pass
+                try:
+                    window.addstr(17,0, str(round(self.channels[20].get(), 2))+"\t"+
+                                        str(round(self.channels[21].get(), 2))+"\t"+
+                                        str(round(self.channels[22].get(), 2))+"\t"+
+                                        str(round(self.channels[23].get(), 2))+"\t"+
+                                        str(round(self.channels[24].get(), 2))+"\t"+
+                                        str(round(self.channels[25].get(), 2))+"\t"+
+                                        str(round(self.channels[26].get(), 2))+"\t"+
+                                        str(round(self.channels[27].get(), 2))+"\t"+
+                                        str(round(self.channels[28].get(), 2))+"\t"+
+                                        str(round(self.channels[29].get(), 2))+"\t")
+                except curses.error:
+                    pass
+                try:
+                    window.addstr(18,0, str(round(self.channels[30].get(), 2))+"\t"+
+                                        str(round(self.channels[31].get(), 2))+"\t"+
+                                        str(round(self.channels[32].get(), 2))+"\t"+
+                                        str(round(self.channels[33].get(), 2))+"\t"+
+                                        str(round(self.channels[34].get(), 2))+"\t"+
+                                        str(round(self.channels[35].get(), 2))+"\t"+
+                                        str(round(self.channels[36].get(), 2))+"\t"+
+                                        str(round(self.channels[37].get(), 2))+"\t"+
+                                        str(round(self.channels[38].get(), 2))+"\t"+
+                                        str(round(self.channels[39].get(), 2))+"\t")
+                except curses.error:
+                    pass
+                try:
+                    window.addstr(19,0, str(round(self.channels[40].get(), 2))+"\t"+
+                                        str(round(self.channels[41].get(), 2))+"\t"+
+                                        str(round(self.channels[42].get(), 2))+"\t"+
+                                        str(round(self.channels[43].get(), 2))+"\t"+
+                                        str(round(self.channels[44].get(), 2))+"\t"+
+                                        str(round(self.channels[45].get(), 2))+"\t"+
+                                        str(round(self.channels[46].get(), 2))+"\t"+
+                                        str(round(self.channels[47].get(), 2))+"\t"+
+                                        str(round(self.channels[48].get(), 2))+"\t"+
+                                        str(round(self.channels[49].get(), 2))+"\t"+
+                                        str(round(self.channels[50].get(), 2))+"\t")
+                except curses.error:
+                    pass
 
                     
-                    
+                try:
                     window.refresh()
                     time.sleep(0.001)
                 except curses.error:
                     pass
 
-            for chn in self.channels:
-                chn.update()
             score = self.update_score()
             print(score)
             self.c.readScore(score)
-            self.c.rewindScore()
-            self.c.start()
-            res = self.c.perform()
+            #self.c.rewindScore()
+            res = self.c.performBuffer()
+            while res == 0:
+                res = self.c.performBuffer()
+                time.sleep(0.01)
             #done = res != 0
             cur_tim = self.c.CPUTime(tim)
             out = np.concatenate((out, self.c.outputBuffer()))
@@ -205,15 +237,15 @@ class CsoundInterface():
         if len(params) != N_PARAMS:
             raise ValueError("Incorrect number of parameters!")
         adsr_fac = self.params_sec * 4
-        ratio_fac = params[50] * 8.
-        params[0] *= 440. * 4.
-        params[0] += 110.
+        ratio_fac = params[0] * 8.
+        params[2] *= 440. * 4.
+        params[2] += 110.
         #params[0] *= 60                # fr
         #params[0] += 12
         #params[0] = 440. * np.power(2, (round(params[0])-49) / 12.)
-        params[1:30] *= adsr_fac
-        params[30:40] *= 1.             # amp
-        params[40:50] *= ratio_fac
+        params[2:32] *= adsr_fac
+        params[32:42] *= 1.             # amp
+        params[42:52] *= ratio_fac
         #params[40:50] = np.round(params[40:50])
         return params
 
@@ -229,8 +261,8 @@ class CsoundInterface():
     def update_score(self):
         out = """\n
         i1 0 """+str(OUTPUT_DURATION)
-        for param in self.params:
-            out += " "+str(param)
+        #for param in self.params:
+        #    out += " "+str(param)
         out += "\n"
         return out
 
@@ -249,62 +281,115 @@ gisine	ftgen 0, 0, 2^12, 10, 1	;A SINE WAVE
 instr 	1
 	kporttime	linseg	0,0.01,0.05		;PORTAMENTO TIME RAMPS UP QUICKLY FROM ZERO
 
-	icps	=	p4
+	icps	    chnget  "param1"
 	kfund		portk	icps, kporttime		;SMOOTH VARIABLE CHANGES WITH PORTK
 	kamp	=	0.1
 
-	kampatt1	= p5
-	kampatt2	= p6
-	kampatt3	= p5
-	kampatt4	= p7
-	kampatt5	= p8
-	kampatt6	= p9
-	kampatt7	= p10
-	kampatt8	= p11
-	kampatt9	= p12
-	kampatt10	= p13
-	kampdec1	= p14
-	kampdec2	= p15
-	kampdec3	= p16
-	kampdec4	= p17
-	kampdec5	= p18
-	kampdec6	= p19
-	kampdec7	= p20
-	kampdec8	= p21
-	kampdec9	= p22
-	kampdec10	= p23
-	kamprel1	= p24
-	kamprel2	= p25
-	kamprel3	= p26
-	kamprel4	= p27
-	kamprel5	= p28
-	kamprel6	= p29
-	kamprel7	= p30
-	kamprel8	= p31
-	kamprel9	= p32
-	kamprel10	= p33
+    kampatt1	init	0
+	kampatt2	init	0
+	kampatt3	init	0
+	kampatt4	init	0
+	kampatt5	init	0
+	kampatt6	init	0
+	kampatt7	init	0
+	kampatt8	init	0
+	kampatt9	init	0
+	kampatt10	init	0
+	kampdec1	init	0
+	kampdec2	init	0
+	kampdec3	init	0
+	kampdec4	init	0
+	kampdec5	init	0
+	kampdec6	init	0
+	kampdec7	init	0
+	kampdec8	init	0
+	kampdec9	init	0
+	kampdec10	init	0
+	kamprel1	init	0
+	kamprel2	init	0
+	kamprel3	init	0
+	kamprel4	init	0
+	kamprel5	init	0
+	kamprel6	init	0
+	kamprel7	init	0
+	kamprel8	init	0
+	kamprel9	init	0
+	kamprel10	init	0
 
-	kPartAmp1	= p34
-	kPartAmp2	= p35
-	kPartAmp3	= p36
-	kPartAmp4	= p37
-	kPartAmp5	= p38
-	kPartAmp6	= p39
-	kPartAmp7	= p40
-	kPartAmp8	= p41
-	kPartAmp9	= p42
-	kPartAmp10	= p43
+	kPartAmp1	init	0
+	kPartAmp2	init	0
+	kPartAmp3	init	0
+	kPartAmp4	init	0
+	kPartAmp5	init	0
+	kPartAmp6	init	0
+	kPartAmp7	init	0
+	kPartAmp8	init	0
+	kPartAmp9	init	0
+	kPartAmp10	init	0
 
-	kratio1		= p44
-	kratio2		= p45
-	kratio3		= p46
-	kratio4		= p47
-	kratio5		= p48
-	kratio6		= p49
-	kratio7		= p50
-	kratio8		= p51
-	kratio9		= p52
-	kratio10	= p53
+	kratio1		init	0
+	kratio2		init	0
+	kratio3		init	0
+	kratio4		init	0
+	kratio5		init	0
+	kratio6		init	0
+	kratio7		init	0
+	kratio8		init	0
+	kratio9		init	0
+	kratio10	init	0
+
+	kampatt1	chnget	"param5"
+	kampatt2	chnget	"param6"
+	kampatt3	chnget	"param5"
+	kampatt4	chnget	"param7"
+	kampatt5	chnget	"param8"
+	kampatt6	chnget	"param9"
+	kampatt7	chnget	"param10"
+	kampatt8	chnget	"param11"
+	kampatt9	chnget	"param12"
+	kampatt10	chnget	"param13"
+	kampdec1	chnget	"param14"
+	kampdec2	chnget	"param15"
+	kampdec3	chnget	"param16"
+	kampdec4	chnget	"param17"
+	kampdec5	chnget	"param18"
+	kampdec6	chnget	"param19"
+	kampdec7	chnget	"param20"
+	kampdec8	chnget	"param21"
+	kampdec9	chnget	"param22"
+	kampdec10	chnget	"param23"
+	kamprel1	chnget	"param24"
+	kamprel2	chnget	"param25"
+	kamprel3	chnget	"param26"
+	kamprel4	chnget	"param27"
+	kamprel5	chnget	"param28"
+	kamprel6	chnget	"param29"
+	kamprel7	chnget	"param30"
+	kamprel8	chnget	"param31"
+	kamprel9	chnget	"param32"
+	kamprel10	chnget	"param33"
+
+	kPartAmp1	chnget	"param34"
+	kPartAmp2	chnget	"param35"
+	kPartAmp3	chnget	"param36"
+	kPartAmp4	chnget	"param37"
+	kPartAmp5	chnget	"param38"
+	kPartAmp6	chnget	"param39"
+	kPartAmp7	chnget	"param40"
+	kPartAmp8	chnget	"param41"
+	kPartAmp9	chnget	"param42"
+	kPartAmp10	chnget	"param43"
+
+	kratio1		chnget	"param44"
+	kratio2		chnget	"param45"
+	kratio3		chnget	"param46"
+	kratio4		chnget	"param47"
+	kratio5		chnget	"param48"
+	kratio6		chnget	"param49"
+	kratio7		chnget	"param50"
+	kratio8		chnget	"param51"
+	kratio9		chnget	"param52"
+	kratio10	chnget	"param53"
 	
 	
 

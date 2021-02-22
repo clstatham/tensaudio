@@ -27,9 +27,9 @@ from hilbert import *
 np.random.seed(int(round(time.time())))
 torch.random.seed()
 
+
 total_amps = []
 total_phases = []
-
 total_gen_losses = []
 total_dis_losses = []
 total_real_verdicts = []
@@ -53,6 +53,7 @@ def record_amp_phase(amp, phase):
     # total_phases.append(phase)
     pass
 def plot_metrics(i, show=False):
+    global total_gen_losses, total_dis_losses
     timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
     dirname = os.path.join(PLOTS_DIR, timestamp)
     os.mkdir(dirname)
@@ -79,6 +80,10 @@ def plot_metrics(i, show=False):
     #     ax2.scatter(X, Y, Z, s=1, cmap=cm.coolwarm)
     #     fig2.savefig(os.path.join(dirname, filename2))
 
+    if type(total_gen_losses) is torch.Tensor:
+        total_gen_losses = total_gen_losses.detach().cpu().numpy()
+    if type(total_dis_losses) is torch.Tensor:
+        total_dis_losses = total_dis_losses.detach().cpu().numpy()
     if len(total_gen_losses) + len(total_dis_losses) + len(total_real_verdicts) + len(total_fake_verdicts) > 0:
         fig3 = plt.figure(figsize=(10,10))
         fig3.suptitle("Gen/Dis Losses " + timestamp)
@@ -274,8 +279,8 @@ def train_on_random(window, i, dirname):
     z = create_input()
     begin_time = time.time()
     run_models(window, z)
-    total_gen_losses.append(gen_loss)
-    total_dis_losses.append(dis_loss)
+    total_gen_losses.append(gen_loss.clone().detach().cpu().numpy())
+    total_dis_losses.append(dis_loss.clone().detach().cpu().numpy())
     window.addstr(8,0, "|] Gen Loss:\t\t"+ str(round(float(gen_loss), 4)))
     window.addstr(9,0, "|] Dis Loss:\t\t"+ str(round(float(dis_loss), 4)))
 
