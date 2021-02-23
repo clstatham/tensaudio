@@ -71,13 +71,14 @@ class TAGenerator(nn.Module):
             self.create_dense_net(hilb_mode=True)
         elif GEN_MODE == 3:
             self.create_dense_net(hilb_mode=False)
-        elif GEN_MODE == 5:
-            self.total_samp_out = TOTAL_PARAM_UPDATES * N_PARAMS
-            self.desired_process_units = TOTAL_SAMPLES_IN
-            self.create_dense_net(hilb_mode=False)
+        else:
+            # self.total_samp_out = TOTAL_PARAM_UPDATES * N_PARAMS
+            # self.desired_process_units = TOTAL_SAMPLES_IN
+            # self.create_dense_net(hilb_mode=False)
+            raise ValueError("Created wrong generator class!")
 
     def criterion(self, label, output):
-        l = self.loss(torch.unsqueeze(output, 0), torch.unsqueeze(label, 0))
+        l = self.loss(torch.unsqueeze(output.cuda(), 0), torch.unsqueeze(label, 0))
         l = F.relu(l)
         return l
     
@@ -97,7 +98,9 @@ class TAGenerator(nn.Module):
 
         v_cprint("Creating Linear layer.")
         #self.initial_layer = nn.ReLU().cuda()
-        self.initial_layer = nn.Linear(TOTAL_SAMPLES_IN, TOTAL_SAMPLES_IN).cuda()
+        self.initial_layers = [
+            nn.Linear(TOTAL_SAMPLES_IN, TOTAL_SAMPLES_IN).cuda()
+        ]
 
         self.n_preprocessing_indices = 1
         self.n_postprocessing_indices = 1
@@ -110,14 +113,15 @@ class TAGenerator(nn.Module):
             self.preprocess_layers.append(nn.ConvTranspose1d(Lin, Lout, kernel_size=self.kernel_size, stride=self.stride, padding=self.padding, output_padding=self.output_padding, dilation=self.dilation).cuda())
             Lin  = Lout
             self.n_preprocessing_indices += 1
-        self.n_preprocessing_indices -= 1
+        self.preprocess_layers.append(nn.Flatten())
         v_cprint("Created", self.n_preprocessing_indices+1, "preprocessing layers.")
 
         if GEN_MODE in [5]:
             self.n_process_units = TOTAL_SAMPLES_IN
         else:
-            self.n_process_units = Lout*N_BATCHES*N_CHANNELS*(TOTAL_SAMPLES_IN//2)
-        vv_cprint("Creating", N_PROCESS_LAYERS, "Linear layers", self.n_process_units, ">", self.n_process_units)
+            #self.n_process_units = Lout*N_BATCHES*N_CHANNELS*(TOTAL_SAMPLES_IN//2)
+            self.n_process_units = 361
+        print("Creating", N_PROCESS_LAYERS, "Linear layers", self.n_process_units, ">", self.n_process_units)
         for i in range(N_PROCESS_LAYERS):
             self.process_layers.append(nn.Linear(self.n_process_units, self.n_process_units).cuda())
         v_cprint("Created", len(self.process_layers), "processing layers.")
@@ -130,16 +134,18 @@ class TAGenerator(nn.Module):
             self.postprocess_layers.append(nn.ConvTranspose1d(Lin, Lout, kernel_size=self.kernel_size, stride=self.stride, padding=self.padding, output_padding=self.output_padding, dilation=self.dilation).cuda())
             Lin  = Lout
             self.n_postprocessing_indices += 1
-        self.n_postprocessing_indices -= 1
+        self.postprocess_layers.append(nn.Flatten())
         v_cprint("Created", self.n_postprocessing_indices+1, "postprocessing layers.")
 
         v_cprint("Creating Linear Layer.")
         #self.final_layer = nn.ReLU().cuda()
-        self.final_layer = nn.Linear(Lout, self.total_samp_out)
+        self.final_layers = [nn.Linear(Lout, self.total_samp_out)]
         
-        self.preprocess_layers = nn.ModuleList(self.preprocess_layers).cuda()
-        self.process_layers = nn.ModuleList(self.process_layers).cuda()
-        self.postprocess_layers = nn.ModuleList(self.postprocess_layers).cuda()
+        self.initial_layers = nn.Sequential(*self.initial_layers).cuda()
+        self.preprocess_layers = nn.Sequential(*self.preprocess_layers).cuda()
+        self.process_layers = nn.Sequential(*self.process_layers).cuda()
+        self.postprocess_layers = nn.Sequential(*self.postprocess_layers).cuda()
+        self.final_layers = nn.Sequential(*self.final_layers).cuda()
 
     def gen_rnn(self, inputs):
         assert(GEN_MODE == 1)
@@ -175,57 +181,38 @@ class TAGenerator(nn.Module):
         return audio
 
     def run_dense_net(self, data, hilb_mode=False):
-        vv_cprint("|}} Initial data.shape:", data.shape)
-        data = data.flatten()
-        data = self.initial_layer(data.float())
+        pre_init = data.flatten()
+        vv_cprint("|}} Initial data.shape:", pre_init.shape)
+        post_init = self.initial_layers.forward(pre_init.float())
 
         Lin = TOTAL_SAMPLES_IN
         Lout = (Lin-1)*self.stride-2*self.padding*self.dilation*(self.kernel_size-1)*self.output_padding+1
-        data = prep_data_for_batch_operation(data, None, TOTAL_SAMPLES_IN, 1)
+        pre_preprocess, _ = DataBatchPrep.apply(data.clone(), None, TOTAL_SAMPLES_IN, 1)
 
-        vv_cprint("|}} Initial layer done.")
-        vv_cprint("|}} data.shape:", data.shape)
-        i = 0
-        for layer in self.preprocess_layers:
-            data = layer(data.float())
-            vv_cprint("|}} Pre-process layer", i+1, "done.")
-            vv_cprint("|}} data.shape:", data.shape)
-            i += 1
-        
-        data = torch.squeeze(data)
-        data = data.flatten()
-        vv_cprint("|}} data.shape going into process layers:", data.shape)
-        for i in range(len(self.process_layers)):
-            data = self.process_layers[i](data)
-            data = data.flatten()
-            #vv_cprint("|}} Process layer", i+1, "done.")
-            #vv_cprint("|}} data.shape:", data.shape)
+        vv_cprint("|}} Initial layers done.")
+        vv_cprint("|}} data.shape:", pre_preprocess.shape)
+        post_preprocess = self.preprocess_layers.forward(pre_preprocess)
+
+        vv_cprint("|}} data.shape going into process layers:", post_preprocess.shape)
+        post_process = self.process_layers.forward(post_preprocess)
         vv_cprint("|}} Process layers done.")
-        vv_cprint("|}} data.shape:", data.shape)
+        vv_cprint("|}} data.shape:", post_process.shape)
 
         Lin = self.n_process_units
         Lout = (Lin-1)*self.stride-2*self.padding*self.dilation*(self.kernel_size-1)*self.output_padding+1
-        data = prep_data_for_batch_operation(data, None, Lin, 1)
+        pre_postprocess, _ = DataBatchPrep.apply(post_process.clone(), None, Lin, 1)
 
-        i = 1
-        for layer in self.postprocess_layers:
-            data = layer(data)
-            vv_cprint("|}} Post-process layer", i, "done.")
-            vv_cprint("|}} data.shape:", data.shape)
-            i += 1
+        post_postprocess = self.postprocess_layers.forward(pre_postprocess)
         
-        data = data.flatten()
-        #print(data.shape)
-        data = self.final_layer(data)
-        data = data.flatten()
+        post_final = self.final_layers.forward(post_postprocess)
         vv_cprint("|}} Final layer done.")
-        vv_cprint("|}} Final data.shape:", data.shape)
-        return data
+        vv_cprint("|}} Final data.shape:", post_final.shape)
+        return post_final.flatten()
 
     def gen_dense_hilb(self, hilb):
         assert (GEN_MODE == 2)
         hilb = torch.tensor(stack_hilb(hilb)).cuda()
-        hilb = prep_data_for_batch_operation(hilb, N_BATCHES, N_CHANNELS, None)
+        hilb = DataBatchPrep.apply(hilb, N_BATCHES, N_CHANNELS, None)
         vv_cprint("|} Ready for launch! Going to the net now, wheeee!")
         hilb = self.run_dense_net(hilb, hilb_mode=True)
         vv_cprint("|} Whew... Made it out of the net alive!")
@@ -243,28 +230,18 @@ class TAGenerator(nn.Module):
         return hilb[0], hilb[1]
 
     def gen_dense(self, inputs):
-        assert(GEN_MODE in (2, 3, 5))
-        #inputs = tf.expand_dims(inputs, axis=0)
-        #audio = my_audioert(inputs)
-        #audio = audio_tensor(x[0], x[1])
-        out = inputs
-        orig_shape = out.shape
-        
-        out = prep_data_for_batch_operation(out, N_BATCHES, N_CHANNELS, None)
+        assert(GEN_MODE in (2, 3))
         vv_cprint("|} Ready for launch! Going to the net now, wheeee!")
-        out = self.run_dense_net(out, hilb_mode=False)
+        prepped, _ = DataBatchPrep.apply(inputs, N_BATCHES, N_CHANNELS, None)
+        post_net = self.run_dense_net(prepped, hilb_mode=False)
         vv_cprint("|} Whew... Made it out of the net alive!")
-        
-        out = torch.squeeze(out)
-        #audio = audio[:, -1, :] # the last
 
-        out = torch.flatten(out)
-        out, error = ensure_size(out, self.total_samp_out)
-        if error > 0:
-            vv_cprint("|} Truncated output by", error, "samples.")
-        elif error < 0:
-            vv_cprint("|} Padded output by", -error, "samples.")
-        return out
+        #out, error = ensure_size(post, self.total_samp_out)
+        #if error > 0:
+        #    vv_cprint("|} Truncated output by", error, "samples.")
+        #elif error < 0:
+        #    vv_cprint("|} Padded output by", -error, "samples.")
+        return post_net[:self.total_samp_out]
 
     def gen_fn(self, inputs):
         if GEN_MODE == 0:
@@ -279,13 +256,8 @@ class TAGenerator(nn.Module):
             return inverse_hilbert(amp, phase)
         if GEN_MODE == 3:
             return self.gen_dense(inputs)
-        if GEN_MODE == 5:
-            o = self.gen_dense(inputs)
-            #out = out.view(out.size(0), -1)
-            #out -= out.min(1, keepdim=True)[0]
-            #out /= out.max(1, keepdim=True)[0]
-            #out = out.view(self.total_samp_out)
-            return o.abs()
+        else:
+            return None
     
     def forward(self, inputs):
         return self.gen_fn(inputs)

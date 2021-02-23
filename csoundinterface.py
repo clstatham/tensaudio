@@ -16,7 +16,7 @@ class CSIRun(ag.Function):
         return params.new(G_csi.perform(params_, None).to(torch.float)), params
     @staticmethod
     def backward(ctx, grad_output, dummy):
-        params = ctx.saved_tensors
+        params = ctx.saved_tensors[0]
         return params
 
 class CsoundInterface():

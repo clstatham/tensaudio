@@ -25,7 +25,7 @@ VERBOSITY_LEVEL = 2 # 0, 1, 2
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
 # an error!
-GEN_MODE = 5            # 0 = RNN/Hilbert mode
+GEN_MODE = 3            # 0 = RNN/Hilbert mode
                         # 1 = RNN/Audio mode
                         # 2 = Conv/Hilbert mode
                         # 3 = Conv/Audio mode
@@ -50,7 +50,7 @@ N_PROCESS_LAYERS = 64
 BATCH_OPTIMIZATION_FACTOR = 4000
 
 # Hyperparameters
-GENERATOR_LR = 0.001
+GENERATOR_LR = 0.00005
 GENERATOR_BETA = 0.3
 
 # If you change ANY of the following values, you MUST empty
@@ -62,7 +62,7 @@ DIS_MODE = 1            # 0 = Hilbert mode
                         # 1 = FFT mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
-N_DIS_LAYERS = 8
+N_DIS_LAYERS = 4
 DIS_KERNEL_SIZE = 1
 
 # Hyperparameters

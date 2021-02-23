@@ -188,7 +188,7 @@ class OneStep():
 
     def generate_one_step(self):
         with torch.no_grad():
-            predicted_logits = self.generator(generate_input_noise(TOTAL_SAMPLES_IN))
+            predicted_logits = self.generator(generate_input_noise())
         return predicted_logits
 
 def create_input():
@@ -199,11 +199,11 @@ def create_input():
         #    y = torch.from_numpy(spectral_convolution(x, y)).cuda()
         return y
 
-def generate_input_noise(b_size):
+def generate_input_noise():
     if GEN_MODE in [5]:
         return torch.randn(1, TOTAL_SAMPLES_IN, 1, requires_grad=True).cuda()
     else:
-        return torch.randn(b_size, TOTAL_SAMPLES_IN, 1, 1, requires_grad=True).cuda()
+        return torch.randn(1, TOTAL_SAMPLES_IN, 1, 1, requires_grad=True).cuda()
 
 gen_loss, dis_loss = None, None
 
@@ -222,7 +222,7 @@ def get_output_from_params(params, window):
     #if window is not None:
         #window.addstr(3,0, str(params.shape[0]))
         #window.refresh()
-    audio, _ = CSIRun.apply(params.clone())
+    audio = CSIRun.apply(params.clone())
     #noise = np.random.randn(len(audio)) * 0.0001
     # for i in range(len(audio)):
     #     if audio[i] == np.inf or audio[i] == np.nan:
@@ -261,13 +261,13 @@ def run_models(window, real):
     #dis_loss_real.backward(retain_graph=True)
 
     if GEN_MODE in [5]:
-        noise = generate_input_noise(1)
+        noise = generate_input_noise()
         params = gen(noise)
         audio = get_output_from_params(params, window)
         fake = audio.float().cuda()
     else:
-        noise = generate_input_noise(TOTAL_SAMPLES_IN)
-        fake = gen(noise, window)
+        noise = generate_input_noise()
+        fake = gen(noise)
     y = dis(fake)
     
     fake_verdict = y.mean()
@@ -342,7 +342,7 @@ def train_on_random(window, i, dirname):
 
 clear = lambda: os.system('cls' if os.name=='nt' else 'clear')
 
-def train_until_interrupt(window, save_plots=False):
+def train_until_interrupt(window, G_vis, save_plots=False):
     states = None
     i = 0
     j = 0
@@ -461,7 +461,7 @@ def train_until_interrupt(window, save_plots=False):
 if __name__ == "__main__":
     global EXAMPLE_RESULT_FILES, EXAMPLE_FILES, INPUT_FILES
     global EXAMPLE_RESULTS, EXAMPLES, INPUTS
-    global gen, dis, gen_optim, dis_optim, onestep
+    global gen, dis, gen_optim, dis_optim, onestep, G_vis
     print("Opening example results...")
     EXAMPLE_RESULT_FILES, EXAMPLE_RESULT_SRS = open_truncate_pad(EXAMPLE_RESULTS_DIR)
     if USE_REAL_AUDIO:
@@ -482,7 +482,8 @@ if __name__ == "__main__":
         print("Created", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
     print("Creating networks...")
-    gen = TAInstParamGenerator().cuda()
+    #gen = TAInstParamGenerator().cuda()
+    gen = TAGenerator().cuda()
     dis = TADiscriminator().cpu()
     gen.apply(weights_init)
     dis.apply(weights_init)
@@ -493,10 +494,10 @@ if __name__ == "__main__":
 
     print_global_constants()
     
-    if GEN_MODE in [5]:
-        print("Initializing Visualizer...")
-        G_vis = init_gvis(800, 600)
+    print("Initializing Visualizer...")
+    G_vis = init_gvis(800, 600)
 
+    if GEN_MODE in [5]:
         print("Creating CSound Interface...")
         result = G_csi.compile()
         if result != 0:
@@ -509,7 +510,7 @@ if __name__ == "__main__":
     print("Initialization complete! Starting...")
     time.sleep(1)
 
-    i = curses.wrapper(train_until_interrupt, True)
+    i = curses.wrapper(train_until_interrupt, G_vis, True)
     print("Generating...")
     if GEN_MODE in [5]:
         params = onestep.generate_one_step()

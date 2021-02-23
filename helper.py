@@ -338,6 +338,23 @@ def ensure_size(t, size, channels=1):
       t = t[:][:-delta]
   return t, delta
 
+class DataBatchPrep(Function):
+  @staticmethod
+  def forward(ctx, inp, exp_batches, exp_channels, exp_timesteps):
+    ctx.set_materialize_grads(False)
+    ctx.exp_batches = exp_batches
+    ctx.exp_channels = exp_channels
+    ctx.exp_timesteps = exp_timesteps
+    ctx.save_for_backward(torch.empty_like(inp))
+    ctx.mark_dirty(inp)
+    inp_ = inp.detach()
+    return inp.new(prep_data_for_batch_operation(inp_, exp_batches, exp_channels, exp_timesteps, greedy=False, return_shape=False)), inp
+  def backward(ctx, grad_output, dummy):
+    if grad_output is None:
+      return None, None, None, None
+    orig_shape = ctx.saved_tensors[0]
+    return torch.reshape(grad_output, orig_shape.shape), None, None, None
+
 def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, greedy=False, return_shape=False):
   t = torch.flatten(t)
   actual = t.shape[0]

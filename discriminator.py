@@ -33,7 +33,7 @@ class TADiscriminator(nn.Module):
         self.net.append(nn.Conv2d(self.ndf*(2**i), 1, self.ksz, 1, 0, bias=False))
         self.net.append(nn.Flatten())
 
-        linear_units = ((2*TOTAL_SAMPLES_OUT)+KONTROL_SAMPLES)//(2**i)
+        linear_units = int(((2*TOTAL_SAMPLES_OUT)+((self.n_layers/16)*KONTROL_SAMPLES))/(2**i))
         self.net2 = []
         for _ in range(self.n_layers//2):
             self.net2.append(nn.Linear(linear_units, linear_units))
