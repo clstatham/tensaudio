@@ -1,17 +1,32 @@
 import time
 import ctcsound
 import torch
+import torch.autograd as ag
+import torch.nn as nn
 import librosa
 from pythonosc.udp_client import SimpleUDPClient
 from global_constants import *
 
+class CSIRun(ag.Function):
+    @staticmethod
+    def forward(ctx, params):
+        params_ = params.detach().cpu().numpy()
+        ctx.save_for_backward(params)
+        ctx.mark_dirty(params)
+        return params.new(G_csi.perform(params_, None).to(torch.float)), params
+    @staticmethod
+    def backward(ctx, grad_output, dummy):
+        params = ctx.saved_tensors
+        return params
+
 class CsoundInterface():
-    def __init__(self, vis):
+    def __init__(self):
         self.param_len_in_seconds = OUTPUT_DURATION/TOTAL_PARAM_UPDATES
+        self.param_len_in_samples = PARAM_UPDATE_SAMPLES
         self.c = ctcsound.Csound()
 
         self.client = SimpleUDPClient("127.0.0.1", 7770)
-        self.vis = vis
+        #self.vis = vis
         self.total_instruments = 1
         self.total_gens = 1
         self.params = [1.] * N_PARAMS
@@ -32,7 +47,7 @@ class CsoundInterface():
     def param_gen(self, num):
         while True:
             if num in [1]:
-                yield np.log2(self.get_param(num))*5
+                yield torch.log2(self.get_param(num))*5
             else:
                 yield self.get_param(num)*10
 
@@ -51,10 +66,11 @@ class CsoundInterface():
         return 0
 
     def perform(self, params, window):
+        #out = torch.autograd.Variable(torch.empty(0), requires_grad=True).cuda()
         out = np.array([])
         done = False
-        last_params = params[0:N_PARAMS]
-        self.update_params(last_params)
+        #last_params = params[0:N_PARAMS]
+        #self.update_params(last_params)
 
         i = 1
         tim = ctcsound.RtClock()
@@ -63,15 +79,16 @@ class CsoundInterface():
         while not done:
             param_slice = params[(i-1)*N_PARAMS:(i)*N_PARAMS]
             if len(param_slice) == 0:
+                # this should never happen, but if it does, loop back to the start
+                raise RuntimeWarning("Warning: Length of parameter slice invalid")
                 i = 1
                 param_slice = params[0:N_PARAMS]
-            for param in param_slice:
-                if param < 0.1:
-                    i += 1
-                    continue
+            for j in range(len(param_slice)):
+                if param_slice[j] < 0.01:
+                    param_slice[j] = 0.01
             param_slice = self.scale_params(param_slice)
             self.update_params(param_slice)
-            """
+            
             if window is not None:
                 try:
                     window.addstr(14,0, "Current Parameters:")
@@ -88,69 +105,69 @@ class CsoundInterface():
                 except curses.error:
                     pass
                 try:
-                    window.addstr(15,0, str(round(self.params[0], 2))+"\t"+
-                                        str(round(self.params[1], 2))+"\t"+
-                                        str(round(self.params[2], 2))+"\t"+
-                                        str(round(self.params[3], 2))+"\t"+
-                                        str(round(self.params[4], 2))+"\t"+
-                                        str(round(self.params[5], 2))+"\t"+
-                                        str(round(self.params[6], 2))+"\t"+
-                                        str(round(self.params[7], 2))+"\t"+
-                                        str(round(self.params[8], 2))+"\t"+
-                                        str(round(self.params[9], 2))+"\t")
+                    window.addstr(15,0, str(round(float(self.params[0]), 2))+"\t"+
+                                        str(round(float(self.params[1]), 2))+"\t"+
+                                        str(round(float(self.params[2]), 2))+"\t"+
+                                        str(round(float(self.params[3]), 2))+"\t"+
+                                        str(round(float(self.params[4]), 2))+"\t"+
+                                        str(round(float(self.params[5]), 2))+"\t"+
+                                        str(round(float(self.params[6]), 2))+"\t"+
+                                        str(round(float(self.params[7]), 2))+"\t"+
+                                        str(round(float(self.params[8]), 2))+"\t"+
+                                        str(round(float(self.params[9]), 2))+"\t")
                 except curses.error:
                     pass
                 try:
-                    window.addstr(16,0, str(round(self.params[10], 2))+"\t"+
-                                        str(round(self.params[11], 2))+"\t"+
-                                        str(round(self.params[12], 2))+"\t"+
-                                        str(round(self.params[13], 2))+"\t"+
-                                        str(round(self.params[14], 2))+"\t"+
-                                        str(round(self.params[15], 2))+"\t"+
-                                        str(round(self.params[16], 2))+"\t"+
-                                        str(round(self.params[17], 2))+"\t"+
-                                        str(round(self.params[18], 2))+"\t"+
-                                        str(round(self.params[19], 2))+"\t")
+                    window.addstr(16,0, str(round(float(self.params[10]), 2))+"\t"+
+                                        str(round(float(self.params[11]), 2))+"\t"+
+                                        str(round(float(self.params[12]), 2))+"\t"+
+                                        str(round(float(self.params[13]), 2))+"\t"+
+                                        str(round(float(self.params[14]), 2))+"\t"+
+                                        str(round(float(self.params[15]), 2))+"\t"+
+                                        str(round(float(self.params[16]), 2))+"\t"+
+                                        str(round(float(self.params[17]), 2))+"\t"+
+                                        str(round(float(self.params[18]), 2))+"\t"+
+                                        str(round(float(self.params[19]), 2))+"\t")
                 except curses.error:
                     pass
                 try:
-                    window.addstr(17,0, str(round(self.params[20], 2))+"\t"+
-                                        str(round(self.params[21], 2))+"\t"+
-                                        str(round(self.params[22], 2))+"\t"+
-                                        str(round(self.params[23], 2))+"\t"+
-                                        str(round(self.params[24], 2))+"\t"+
-                                        str(round(self.params[25], 2))+"\t"+
-                                        str(round(self.params[26], 2))+"\t"+
-                                        str(round(self.params[27], 2))+"\t"+
-                                        str(round(self.params[28], 2))+"\t"+
-                                        str(round(self.params[29], 2))+"\t")
+                    window.addstr(17,0, str(round(float(self.params[20]), 2))+"\t"+
+                                        str(round(float(self.params[21]), 2))+"\t"+
+                                        str(round(float(self.params[22]), 2))+"\t"+
+                                        str(round(float(self.params[23]), 2))+"\t"+
+                                        str(round(float(self.params[24]), 2))+"\t"+
+                                        str(round(float(self.params[25]), 2))+"\t"+
+                                        str(round(float(self.params[26]), 2))+"\t"+
+                                        str(round(float(self.params[27]), 2))+"\t"+
+                                        str(round(float(self.params[28]), 2))+"\t"+
+                                        str(round(float(self.params[29]), 2))+"\t")
                 except curses.error:
                     pass
                 try:
-                    window.addstr(18,0, str(round(self.params[30], 2))+"\t"+
-                                        str(round(self.params[31], 2))+"\t"+
-                                        str(round(self.params[32], 2))+"\t"+
-                                        str(round(self.params[33], 2))+"\t"+
-                                        str(round(self.params[34], 2))+"\t"+
-                                        str(round(self.params[35], 2))+"\t"+
-                                        str(round(self.params[36], 2))+"\t"+
-                                        str(round(self.params[37], 2))+"\t"+
-                                        str(round(self.params[38], 2))+"\t"+
-                                        str(round(self.params[39], 2))+"\t")
+                    window.addstr(18,0, str(round(float(self.params[30]), 2))+"\t"+
+                                        str(round(float(self.params[31]), 2))+"\t"+
+                                        str(round(float(self.params[32]), 2))+"\t"+
+                                        str(round(float(self.params[33]), 2))+"\t"+
+                                        str(round(float(self.params[34]), 2))+"\t"+
+                                        str(round(float(self.params[35]), 2))+"\t"+
+                                        str(round(float(self.params[36]), 2))+"\t"+
+                                        str(round(float(self.params[37]), 2))+"\t"+
+                                        str(round(float(self.params[38]), 2))+"\t"+
+                                        str(round(float(self.params[39]), 2))+"\t")
                 except curses.error:
                     pass
                 try:
-                    window.addstr(19,0, str(round(self.params[40], 2))+"\t"+
-                                        str(round(self.params[41], 2))+"\t"+
-                                        str(round(self.params[42], 2))+"\t"+
-                                        str(round(self.params[43], 2))+"\t"+
-                                        str(round(self.params[44], 2))+"\t"+
-                                        str(round(self.params[45], 2))+"\t"+
-                                        str(round(self.params[46], 2))+"\t"+
-                                        str(round(self.params[47], 2))+"\t"+
-                                        str(round(self.params[48], 2))+"\t"+
-                                        str(round(self.params[49], 2))+"\t"+
-                                        str(round(self.params[50], 2))+"\t")
+                    window.addstr(19,0, str(round(float(self.params[40]), 2))+"\t"+
+                                        str(round(float(self.params[41]), 2))+"\t"+
+                                        str(round(float(self.params[42]), 2))+"\t"+
+                                        str(round(float(self.params[43]), 2))+"\t"+
+                                        str(round(float(self.params[44]), 2))+"\t"+
+                                        str(round(float(self.params[45]), 2))+"\t"+
+                                        str(round(float(self.params[46]), 2))+"\t"+
+                                        str(round(float(self.params[47]), 2))+"\t"+
+                                        str(round(float(self.params[48]), 2))+"\t"+
+                                        str(round(float(self.params[49]), 2))+"\t"+
+                                        str(round(float(self.params[50]), 2))+"\t")
                 except curses.error:
                     pass
 
@@ -160,21 +177,56 @@ class CsoundInterface():
                 except curses.error:
                     pass
 
-            """
+            
+            tim2 = ctcsound.RtClock()
+            tim2_cpu = self.c.CPUTime(tim2)
             done2 = False
+            out2 = np.array([])
+            k = 0
             while not done2:
                 res = 0
-                while not res:
-                    res = self.c.performBuffer()
-                    newtime = self.c.CPUTime(tim)
-                    if res > 0 or (newtime - tim_cpu) >= self.param_len_in_seconds:
-                        break
+                newtime = 0
+                m = 0
+                while res == 0:
+                    res = self.c.performKsmps()
+                    if res < 0:
+                        raise RuntimeError("performKsmps() failed!")
+                    newtime = self.c.CPUTime(tim2)
                     self.update_params(param_slice)
-                out = np.concatenate((out, self.c.outputBuffer()))
-                done2 = len(out) >= self.param_len_in_seconds*SAMPLE_RATE
+                    m += 1
+                    time.sleep(0.001) # not too fast, now
+                if window is not None:
+                    try:
+                        window.addstr(8,60, "m = "+ str(m)+"\t("+str(round(newtime-tim2_cpu, 4))+" sec)")
+                        window.refresh()
+                    except curses.error:
+                        pass
+                outbuf = self.c.outputBuffer()
+                first_zero_crossing = KONTROL_SAMPLES
+                #while first_zero_crossing <= len(outbuf) and outbuf[first_zero_crossing] >= 0.0001:
+                #    first_zero_crossing += 1
+                out2 = np.concatenate((out2, outbuf[KONTROL_SAMPLES:KONTROL_SAMPLES+PARAM_UPDATE_SAMPLES]))
+                #out.retain_grad()
+                done2 = len(out2) >= self.param_len_in_seconds*SAMPLE_RATE
+                k += 1
+            if window is not None:
+                try:
+                    window.addstr(9,60, "k = "+str(k))
+                    window.refresh()
+                except curses.error:
+                    pass
+            out = np.concatenate((out, out2))
             done = len(out) >= TOTAL_SAMPLES_OUT
             i += 1
-        return out
+        i -= 1
+        if window is not None:
+            try:
+                window.addstr(10,60, "i = "+ str(i))
+                window.refresh()
+            except curses.error:
+                pass
+        #print("Done generating audio in", i-1, "iters (out of target", TOTAL_PARAM_UPDATES, "iters)")
+        return torch.from_numpy(out[:TOTAL_SAMPLES_OUT]).flatten().cuda().requires_grad_(True)
 
     def scale_params(self, params):
         params = params.flatten()
@@ -195,8 +247,8 @@ class CsoundInterface():
         for i in range(N_PARAMS):
             #print(str(i)+": "+str(params[i]))
             self.set_param(i+1, params[i])
-        self.vis.update_vals()
-        self.vis.update_display()
+        #self.vis.update_vals()
+        #self.vis.update_display()
     
     def update_score(self):
         out = """\n
@@ -209,11 +261,14 @@ class CsoundInterface():
         out += "\n"
         return out
 
+global G_csi
+G_csi = CsoundInterface()
+
 FM_SYNTH = """
 instr 	1000
 	kPorttime	linseg	0,0.01,0.05		;PORTAMENTO TIME RAMPS UP QUICKLY FROM ZERO
 
-    
+
 
 """
 param_init_string = ""

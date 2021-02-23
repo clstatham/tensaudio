@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.fft
 import torch.nn as nn
 import torch.nn.functional as F
 from helper import *
@@ -16,11 +17,12 @@ class TADiscriminator(nn.Module):
 
         self.n_layers = N_DIS_LAYERS
         self.ksz = DIS_KERNEL_SIZE
-        self.ndf = 2
+        self.ndf = 1
 
         self.net = []
+        #self.net.append(nn.Identity())
         i = 0
-        for _ in range(self.n_layers):
+        for _ in range(self.n_layers//2):
             c = 2**i
             n = 2**(i+1)
             self.net.append(nn.Conv2d(self.ndf*c, self.ndf*n, self.ksz, 2, 1, bias=False))
@@ -29,35 +31,44 @@ class TADiscriminator(nn.Module):
             i += 1
 
         self.net.append(nn.Conv2d(self.ndf*(2**i), 1, self.ksz, 1, 0, bias=False))
-        self.net.append(nn.Sigmoid())
+        self.net.append(nn.Flatten())
 
-        self.net = nn.ModuleList(self.net)
+        linear_units = ((2*TOTAL_SAMPLES_OUT)+KONTROL_SAMPLES)//(2**i)
+        self.net2 = []
+        for _ in range(self.n_layers//2):
+            self.net2.append(nn.Linear(linear_units, linear_units))
+            self.net2.append(nn.LeakyReLU(0.2, inplace=True))
+        
+        self.net2.append(nn.Sigmoid())
+
+        self.net = nn.Sequential(*self.net)
+        self.net2 = nn.Sequential(*self.net2)
     
     def criterion(self, label, output):
-        l = self.loss(torch.unsqueeze(output, 0), torch.unsqueeze(label, 0))
-        l = F.relu(l)
+        l = self.loss(output, label.cpu())
+        #l = F.relu(l)
         return l
 
-    def forward(self, input1):
-        if type(input1) != torch.Tensor:
-            input1 = torch.from_numpy(input1).float().cuda()
+    def forward(self, inp):
         if DIS_MODE == 0:
-            amp, phase = HilbertWithGradients.apply(input1).detach().cuda()
-            hilb = torch.stack((amp, phase))
-            hilb = torch.unsqueeze(hilb, 0)
-            hilb = torch.unsqueeze(hilb, 3)
-            out = self.net[0](hilb)
+            amp, phase = HilbertWithGradients.apply(inp)
+            inp = torch.stack((amp, phase))
+            inp = torch.unsqueeze(inp, 0)
+            inp = torch.unsqueeze(inp, 3)
+            out = self.net[0](inp.to(torch.float))
         elif DIS_MODE == 1:
-            real, imag = FFTWithGradients.apply(input1).detach().cuda()
-            stft1 = torch.stack((real, imag))
-            stft1 = torch.unsqueeze(stft1, 0)
-            stft1 = torch.unsqueeze(stft1, 3)
-            out = self.net[0](stft1)
-        
-        i = 1
-        for layer in self.net[1:]:
-            #cprint("In discriminator layer #", i)
-            out = layer(out)
-            i += 1
-        #out = torch.mean(out)
-        return out
+            #mag, phas = FFTWithGradients.apply(input1)
+            fft1 = torch.fft.fft(inp)
+            real, imag = torch.real(fft1), torch.imag(fft1)
+            real.retain_grad()
+            imag.retain_grad()
+            mag = torch.sqrt(real**2 + imag**2)
+            pha = torch.atan2(real, imag)
+            mag.retain_grad()
+            pha.retain_grad()
+            stacked = torch.stack([mag, pha]).cpu()
+            stacked.retain_grad()
+
+        out1 = self.net.forward(torch.unsqueeze(torch.unsqueeze(stacked, 0), 0).to(torch.float))
+        out2 = self.net2.forward(out1)
+        return out2

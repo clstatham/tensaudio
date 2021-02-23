@@ -369,9 +369,9 @@ def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, g
       return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s))
   #return tf.reshape(t, (N_BATCHES, 2, 1))
 def normalize_audio(a):
-  return a/np.max(np.abs(a))
+  return a/torch.max(torch.abs(a))
 def write_normalized_audio_to_disk(a, fn):
-  scaled = np.int16(normalize_audio(a) * 32767)
+  scaled = np.int16(normalize_audio(a).detach().cpu().numpy() * 32767)
   soundfile.write(fn, scaled, SAMPLE_RATE, SUBTYPE)
 
 class FFTWithGradients(Function):
@@ -379,7 +379,13 @@ class FFTWithGradients(Function):
     def forward(ctx, p):
         p_ = p.detach().cpu().numpy()
         result = np.fft.fft(p_.astype('float32'))
-        return p.new((np.real(result), np.imag(result)))
+        real = np.real(result)
+        ctx.save_for_backward(real)
+        imag = np.imag(result)
+        ctx.save_for_backward(imag)
+        mag = np.sqrt(real**2 + imag**2)
+        phas = np.arctan2(real, imag)
+        return p.new((mag, phas))
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -388,10 +394,10 @@ class FFTWithGradients(Function):
         numpy_go = grad_output.cpu().numpy()
         #print(numpy_go.shape)
         data = []
-        for i in range(len(numpy_go[0])):
+        for i in range(len(ctx.real)):
           d = []
-          for j in range(len(numpy_go[0][i])):
-            d.append(np.complex(numpy_go[0][i][j], numpy_go[1][i][j]))
+          for j in range(len(ctx.real[i])):
+            d.append(np.complex(ctx.real[i][j], ctx.imag[i][j]))
           data.append(d)
         data = np.array(data)
         orig_size = data.size//2

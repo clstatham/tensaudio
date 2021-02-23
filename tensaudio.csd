@@ -3,7 +3,7 @@
 -Ma
 </CsOptions>
 <CsInstruments>
-sr=22000
+sr=8000
 ksmps=32
 nchnls=1
 0dbfs=1
@@ -17,8 +17,6 @@ turnon 1000
 
 instr 	1000
 	kPorttime	linseg	0,0.01,0.05
-
-    
 
     kP1 init 0
     kParam1 OSClisten gihandle,        "/tensaudio/param1", "f", kP1
@@ -179,18 +177,15 @@ instr 	1000
     ; apart2		foscil	kamp*(aenv2  - 0.001), kfund,1, kratio2, (1*kPartAmp2), gisine
     apart1		foscil	kenv1*kamp, kfund,1, kratio1, (kPartAmp1), gisine
     apart2		foscil	kenv2*kamp, kfund,1, kratio2, (kPartAmp2), gisine
-    apart3      oscil3   kamp, kfund*apart1, gisine
-	amix		sum apart1, apart2, apart3
-				
+	amix		sum apart1, apart2
+
 	out		    amix
 endin
 
 
 </CsInstruments>
 <CsScore>
-r60
-f 0 3600
-s
+f 0 0.5
 e
 
 </CsScore>

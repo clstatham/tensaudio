@@ -56,33 +56,3 @@ def prep_hilb_for_denses(t):
 
 def stack_hilb(t):
     return np.dstack((t.cpu()[0], t.cpu()[1]))
-
-class HilbertWithGradients(Function):
-    @staticmethod
-    def forward(ctx, s):
-        s_ = s.detach().cpu().numpy()
-        amp, phase = my_hilbert(s_)
-        return s.new((amp, phase))
-
-    @staticmethod
-    def backward(ctx, grad_output, n_fft):
-        if grad_output is None:
-            return None, None
-        numpy_go = grad_output.cpu().numpy()
-        amp, phase = my_hilbert(numpy_go)
-        return numpy_go.new((amp, phase))
-
-class InverseHilbertWithGradients(Function):
-    @staticmethod
-    def forward(ctx, s):
-        s_ = s.detach().cpu().numpy()
-        amp, phase = inverse_hilbert(s_)
-        return p.new((amp, phase))
-
-    @staticmethod
-    def backward(ctx, grad_output, n_fft):
-        if grad_output is None:
-            return None, None
-        numpy_go = grad_output.cpu().numpy()
-        amp, phase = inverse_hilbert(numpy_go)
-        return numpy_go.new((amp, phase))

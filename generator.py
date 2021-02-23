@@ -25,7 +25,7 @@ class TAInstParamGenerator(nn.Module):
 
         self.n_layers = N_GEN_LAYERS
         self.ksz = GEN_KERNEL_SIZE
-        self.ndf = N_PARAMS * (5+TOTAL_PARAM_UPDATES)
+        self.ndf = N_PARAMS * 2 * TOTAL_PARAM_UPDATES # ensure we never run out of params
 
         self.layers = [nn.ConvTranspose1d(TOTAL_SAMPLES_IN, self.ndf, self.ksz)]
         i = 0
@@ -40,30 +40,18 @@ class TAInstParamGenerator(nn.Module):
             i += 1
 
         #self.layers.append(nn.Conv1d(self.ndf, self.ndf//2, self.ksz, 1, 0, bias=False))
-        self.layers.append(nn.Sigmoid())
+        #self.layers.append(nn.Sigmoid())
 
-        self.layers = nn.ModuleList(self.layers)
+        self.layers = nn.Sequential(*self.layers)
     
     def criterion(self, label, output):
-        l = self.loss(torch.unsqueeze(output, 0), torch.unsqueeze(label, 0))
-        l = F.relu(l)
+        l = self.loss(output.cuda(), label)
+        #l = F.relu(l)
         return l
     
     def forward(self, inp):
-        #print(inp.shape)
-        out = self.layers[0](inp)
-        i = 1
-        for layer in self.layers[1:]:
-            out = layer(out)
-            i += 1
-        out = out.view(out.size(0), -1)
-        out -= out.min(1, keepdim=True)[0]
-        out /= out.max(1, keepdim=True)[0]
-        out = out.view(self.ndf)
-        out = out[N_PARAMS*5:] # for some reason the first few sets of params are always 0,
-                             # so we generate 5 more than we need and start at the 6th
-        #print(out.shape)
-        return out
+        a = self.layers.forward(inp).flatten()
+        return a/torch.max(torch.abs(a))
 
 class TAGenerator(nn.Module):
     def __init__(self, **kwargs):

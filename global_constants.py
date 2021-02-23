@@ -16,7 +16,7 @@ SLEEP_TIME = 0.001
 MAX_ITERS_PER_SEC = 0
 
 # set to 0 to disable periodically generating progress updates
-SAVE_EVERY_SECONDS = 60
+SAVE_EVERY_SECONDS = 5*60
 # set to 0 to disable periodically saving model
 SAVE_MODEL_EVERY_SECONDS = 10*60
 
@@ -25,27 +25,25 @@ VERBOSITY_LEVEL = 2 # 0, 1, 2
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
 # an error!
-INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
-                        # 'conv' = comparison of example and convolved example result
-
 GEN_MODE = 5            # 0 = RNN/Hilbert mode
                         # 1 = RNN/Audio mode
                         # 2 = Conv/Hilbert mode
                         # 3 = Conv/Audio mode
                         # 5 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
-SAMPLE_RATE = 22000
+SAMPLE_RATE = 8000
 SUBTYPE = 'PCM_16'
 INPUT_DURATION = 4 / SAMPLE_RATE
-OUTPUT_DURATION = 3
+OUTPUT_DURATION = 1
 GEN_KERNEL_SIZE = 1
 # RNN mode only
 N_RNN_LAYERS = 4
 # CSound mode only
 N_GEN_LAYERS = 2
 N_PARAMS = 64
-KONTROL_SAMPLES = 32
-TOTAL_PARAM_UPDATES = 128
+KONTROL_SAMPLES = 64
+PARAM_UPDATE_SAMPLES = SAMPLE_RATE*OUTPUT_DURATION
+TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
 # Non-CSound mode only
 DESIRED_PROCESS_UNITS = 1024
 N_PROCESS_LAYERS = 64
@@ -53,11 +51,13 @@ BATCH_OPTIMIZATION_FACTOR = 4000
 
 # Hyperparameters
 GENERATOR_LR = 0.001
-GENERATOR_BETA = 0.5
+GENERATOR_BETA = 0.3
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/dis_ckpts folder or the discsriminator model will give
 # an error!
+INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
+                        # 'conv' = comparison of example and convolved example result
 DIS_MODE = 1            # 0 = Hilbert mode
                         # 1 = FFT mode
 REAL_LABEL = 1.
@@ -65,9 +65,9 @@ FAKE_LABEL = 0.
 N_DIS_LAYERS = 8
 DIS_KERNEL_SIZE = 1
 
-#Hyperparameters
-DISCRIMINATOR_LR = 0.0002
-DISCRIMINATOR_BETA = 0.3
+# Hyperparameters
+DISCRIMINATOR_LR = 0.0001
+DISCRIMINATOR_BETA = 0.15
 
 
 

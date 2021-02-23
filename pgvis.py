@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 import pygame
 from pygame.locals import *
@@ -73,25 +74,31 @@ class PGVisualizer():
             self.val_history = self.val_history[dif:self.max_vals]
             self.update_display()
 
+    def draw_metrics(self, img, size):
+        surf = pygame.image.fromstring(img, size, "RGB")
+        self.surface.blit(surf, (0,0))
+        pygame.display.flip()
+
     def update_display(self):
         self.surface.fill((50,50,50))
         
         if len(self.val_history) > 5:
             x = 0
-            points = []
+            points = torch.Tensor([])
             for iteration in self.val_history:
                 this_iter = []
                 for val in iteration:
                     this_iter.append([x, (val*2)+100])
-                points.append(this_iter)
+                points = torch.cat((points, torch.Tensor(this_iter)))
                 x += self.width/len(self.val_history)
-            points = np.array(points)
-            points = np.transpose(points, [1,0,2])
+            points = points.permute(1, 0, 2)
             i = 0
             for line in points:
                 pgline = []
                 for point in line:
-                    pgline.append(self.to_pygame_coords(point[0], point[1]))
+                    x = point[0].item()
+                    y = point[1].item()
+                    pgline.append(self.to_pygame_coords(x, y))
                 pygame.draw.lines(self.surface, self.colors[i], False, pgline, 2)
                 i += 1
             
