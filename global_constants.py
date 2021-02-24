@@ -18,9 +18,9 @@ MAX_ITERS_PER_SEC = 0
 # set to 0 to disable periodically generating progress updates
 SAVE_EVERY_SECONDS = 5*60
 # set to 0 to disable periodically saving model
-SAVE_MODEL_EVERY_SECONDS = 10*60
+SAVE_MODEL_EVERY_ITERS = 500
 
-VERBOSITY_LEVEL = 2 # 0, 1, 2
+VERBOSITY_LEVEL = 0 # 0, 1, 2
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give

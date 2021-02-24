@@ -4,6 +4,10 @@ import time
 from datetime import datetime
 import curses
 
+import pygame
+from pygame.locals import *
+from queue import Queue
+import timer3
 import ctcsound
 import librosa
 import matplotlib.pyplot as plt
@@ -17,7 +21,6 @@ import soundfile
 import torch
 import torch.nn as nn
 
-from pgvis import init_gvis
 from csoundinterface import CsoundInterface, CSIRun, G_csi
 from discriminator import TADiscriminator
 from generator import TAGenerator, TAInstParamGenerator
@@ -25,11 +28,11 @@ from global_constants import *
 from helper import *
 from hilbert import *
 
-torch.autograd.set_detect_anomaly(True)
+#torch.autograd.set_detect_anomaly(True)
+plt.switch_backend('agg')
 
 np.random.seed(int(round(time.time())))
 torch.random.seed()
-
 
 total_amps = []
 total_phases = []
@@ -38,23 +41,18 @@ total_dis_losses = []
 total_real_verdicts = []
 total_fake_verdicts = []
 
-# EXAMPLE_RESULT_FILES = []
-# EXAMPLE_FILES = []
-# INPUT_FILES = []
-# EXAMPLE_RESULTS = []
-# EXAMPLES = []
-# INPUTS = []
-# gen = None
-# dis = None
-# gen_optim = None
-# dis_optim = None
-# onestep = None
-# G_vis = None
+def clear_metrics():
+    global total_gen_losses, total_dis_losses, total_fake_verdicts, total_real_verdicts
+    total_dis_losses = []
+    total_fake_verdicts = []
+    total_gen_losses = []
+    total_real_verdicts = []
 
 def record_amp_phase(amp, phase):
     # total_amps.append(amp)
     # total_phases.append(phase)
     pass
+
 def plot_metrics(i, save_to_disk=False):
     global total_gen_losses, total_dis_losses
     timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
@@ -105,9 +103,11 @@ def plot_metrics(i, save_to_disk=False):
         if save_to_disk and i % SAVE_EVERY_SECONDS == 0:
             os.mkdir(dirname)
             fig3.savefig(os.path.join(dirname, filename3))
-    size = canvas.get_width_height()
-    plt.close()
-    return raw_data, size
+        size = canvas.get_width_height()
+        plt.close()
+        surf = pygame.image.fromstring(raw_data, size, "RGB")
+        ta_surface.blit(surf, (0,0))
+        pygame.display.flip()
 
 def open_truncate_pad(name):
     ret = []
@@ -188,7 +188,9 @@ class OneStep():
 
     def generate_one_step(self):
         with torch.no_grad():
+            self.generator.eval()
             predicted_logits = self.generator(generate_input_noise())
+            self.generator.train()
         return predicted_logits
 
 def create_input():
@@ -316,36 +318,52 @@ def run_models(window, real):
 
     return gen_loss, dis_loss
 
-def train_on_random(window, i, dirname):
-    z = torch.autograd.Variable(torch.as_tensor(create_input()), requires_grad=True).cuda()
-    begin_time = time.time()
-    gen_loss, dis_loss = run_models(window, z)
-    total_gen_losses.append(gen_loss.clone().detach().cpu().numpy())
-    total_dis_losses.append(dis_loss.clone().detach().cpu().numpy())
-    window.move(8,0)
-    window.clrtoeol()
-    window.move(9,0)
-    window.clrtoeol()
-    window.addstr(8,0, "|] Gen Loss:\t\t"+ str(round(float(gen_loss), 4)))
-    window.addstr(9,0, "|] Dis Loss:\t\t"+ str(round(float(dis_loss), 4)))
+def save_states():
+    torch.save({
+        'epoch': epoch,
+        'gen_state': gen.state_dict(),
+        'dis_state': dis.state_dict(),
+        'gen_optim_state': gen_optim.state_dict(),
+        'dis_optim_state': dis_optim.state_dict(),
+    }, os.path.join(MODEL_DIR, "checkpoints", "checkpoint.pt"))
 
-    time_diff = time.time() - begin_time
-    window.move(10,0)
-    window.clrtoeol()
-    window.addstr(10,0, "Time per iteration: "+ str(round(time_diff, ndigits=2))+ " seconds.")
-    window.refresh()
-    # if SAVE_MODEL_EVERY_ITERS > 0 and i % SAVE_MODEL_EVERY_ITERS == 0:
-    #     cprint("Saving checkpoints for models...")
-    #     torch.save(gen, os.path.join(MODEL_DIR, "gen_ckpts"))
-    #     torch.save(dis, os.path.join(MODEL_DIR, "dis_ckpts"))
-    return time_diff
+def train_on_random(window, epoch, dirname):
+    while True:
+        z = torch.autograd.Variable(torch.as_tensor(create_input()), requires_grad=True).cuda()
+        begin_time = time.time()
+        gen_loss, dis_loss = run_models(window, z)
+        total_gen_losses.append(gen_loss.clone().detach().cpu().numpy())
+        total_dis_losses.append(dis_loss.clone().detach().cpu().numpy())
+        window.move(8,0)
+        window.clrtoeol()
+        window.move(9,0)
+        window.clrtoeol()
+        window.addstr(8,0, "|] Gen Loss:\t\t"+ str(round(float(gen_loss), 4)))
+        window.addstr(9,0, "|] Dis Loss:\t\t"+ str(round(float(dis_loss), 4)))
+
+        time_diff = time.time() - begin_time
+        window.move(10,0)
+        window.clrtoeol()
+        window.addstr(10,0, "Time per iteration: "+ str(round(time_diff, ndigits=2))+ " seconds.")
+        window.refresh()
+        if SAVE_MODEL_EVERY_ITERS > 0 and epoch % SAVE_MODEL_EVERY_ITERS == 0:
+            window.move(10,40)
+            window.clrtoeol()
+            window.addstr(10,40, "Saving model states...")
+            window.refresh()
+            save_states()
+        else:
+            window.move(10,40)
+            window.clrtoeol()
+            window.refresh()
+        yield time_diff
 
 clear = lambda: os.system('cls' if os.name=='nt' else 'clear')
 
-def train_until_interrupt(window, G_vis, save_plots=False):
+def train_until_interrupt(window, starting_epoch, save_plots=False):
     states = None
     i = 0
-    j = 0
+    epoch = starting_epoch
     diffs = []
     start_time = time.time()
     last_time = start_time
@@ -359,27 +377,58 @@ def train_until_interrupt(window, G_vis, save_plots=False):
     dirname = os.path.join(TRAINING_DIR, "training_"+timestamp)
 
     #clear()
-
+    for x in range(15):
+        try:
+            window.move(x,0)
+            window.clrtoeol()
+        except curses.error:
+            pass
+    
     window.addstr(0,0, "="*80)
     window.addstr(1,0, "MODEL TRAINING STARTED AT "+timestamp)
     window.addstr(2,0, "="*80)
-
-    #csi.start()
-
+    window.addstr(3,40, "Visualizer key commands:")
+    window.addstr(4,40, "s = save checkpoint")
+    window.addstr(5,40, "c = clear metrics")
+    window.addstr(4,60, "x = save & exit")
+    window.refresh()
+    
     if MAX_ITERS == 0:
         i = -1
     while i < MAX_ITERS:
         if RUN_FOR_SEC > 0 and time_passed > RUN_FOR_SEC:
             break
         try:
-            G_vis.handle_events()
-            window.addstr(4,0, "*"*40)
-            window.addstr(5,0, "Initiating iteration #"+str(j+1))
-            
-            #dis_optim.zero_grad()
-            #gen_optim.zero_grad()
+            try:
+                pygame.event.pump()
+                for ev in pygame.event.get():
+                    if ev.type == QUIT or (ev.type == KEYDOWN and ev.key == K_x):
+                        window.move(10,40)
+                        window.clrtoeol()
+                        window.addstr(10,40, "Saving model states...")
+                        window.refresh()
+                        save_states()
+                        return i
+                    elif ev.type == KEYDOWN:
+                        if ev.key == K_s:
+                            window.move(10,40)
+                            window.clrtoeol()
+                            window.addstr(10,40, "Saving model states...")
+                            window.refresh()
+                            save_states()
+                            window.move(10,40)
+                            window.clrtoeol()
+                            window.refresh()
+                        elif ev.key == K_c:
+                            clear_metrics()
+                ta_clk.tick(60)
+            except:
+                pass
 
-            secs_per_iter = train_on_random(window, j, dirname)
+            window.addstr(4,0, "*"*40)
+            window.addstr(5,0, "Initiating iteration #"+str(epoch))
+            trainfunc = train_on_random(window, epoch, dirname)
+            secs_per_iter = next(trainfunc)
             time_passed = time.time() - start_time
             diffs.append(time_passed - last_time)
             last_time = time_passed
@@ -399,19 +448,25 @@ def train_until_interrupt(window, G_vis, save_plots=False):
                     window.refresh()
                 except curses.error:
                     pass
-            avg_iters_per_sec = j / time_passed
+            avg_iters_per_sec = epoch / time_passed
             if save_plots:
-                img, size = plot_metrics(j, save_to_disk=False)
-                G_vis.draw_metrics(img, size)
-            if SAVE_EVERY_SECONDS > 0 and avg_iters_per_sec > 0 and j / avg_iters_per_sec % float(SAVE_EVERY_SECONDS) < 1.0 / avg_iters_per_sec:
+                plot_metrics(epoch, save_to_disk=False)
+            if SAVE_EVERY_SECONDS > 0 and avg_iters_per_sec > 0 and epoch / avg_iters_per_sec % float(SAVE_EVERY_SECONDS) < 1.0 / avg_iters_per_sec:
                 time_since_last_save = -1
+                try:
+                    window.move(11,40)
+                    window.clrtoeol()
+                    window.addstr(11,40, "Generating progress update...")
+                    window.refresh()
+                except curses.error:
+                    pass
                 #cprint("Generating progress update...")
                 #time.sleep(0.5)
                 if num_times_saved == 0:
                     os.mkdir(dirname)
                 begin_time = time.time()
                 if save_plots:
-                    img, size = plot_metrics(j, save_to_disk=True)
+                    img, size = plot_metrics(epoch, save_to_disk=True)
                 if GEN_MODE in [5]:
                     params = onestep.generate_one_step()
                     out1 = get_output_from_params(params, window)
@@ -423,11 +478,16 @@ def train_until_interrupt(window, G_vis, save_plots=False):
                 #    total_amps.append(amp)
                 #if len(total_phases) <= num_times_saved:
                 #    total_phases.append(phase)
-                write_normalized_audio_to_disk(out1, dirname+'/progress'+str(j)+"_"+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav')
+                write_normalized_audio_to_disk(out1, dirname+'/progress'+str(epoch)+"_"+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav')
                 time_last_saved = time.time()
                 time_diff = time.time() - begin_time
                 num_times_saved += 1
-                #cprint("Progress update generated in", str(round(time_diff, ndigits=2)), "seconds.")
+                print("Progress update generated in", str(round(time_diff, ndigits=2)), "seconds.")
+                try:
+                    window.move(11,40)
+                    window.clrtoeol()
+                except curses.error:
+                    pass
             time_since_last_save = time.time() - time_last_saved
             if MAX_ITERS != 0:
                 i += 1
@@ -436,32 +496,28 @@ def train_until_interrupt(window, G_vis, save_plots=False):
                 time.sleep((1/(MAX_ITERS_PER_SEC)) - time_passed % (1/(MAX_ITERS_PER_SEC)))
             if SLEEP_TIME > 0:
                 time.sleep(SLEEP_TIME)
-            j += 1
+            epoch += 1
         except KeyboardInterrupt:
             break
-    # cprint("Saving weights to disk...")
-    # timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
-    # dirname = os.path.join(MODEL_DIR, "gen_weights", timestamp)
-    # os.mkdir(dirname)
-    # gen.save_weights(os.path.join(dirname, "gen_weights"))
-    # dirname = os.path.join(MODEL_DIR, "dis_weights", timestamp)
-    # os.mkdir(dirname)
-    # dis.save_weights(os.path.join(dirname, "dis_weights"))
+    
     try:
         window.addstr(14,0, "="*80)
         window.addstr(15,0, "MODEL TRAINING FINISHED AT "+str(timestamp))
         window.addstr(16,0, "="*80)
+        window.move(10,40)
+        window.clrtoeol()
+        window.addstr(10,40, "Saving model states...")
         window.refresh()
     except curses.error:
         pass
-    #time.sleep(1)
+    save_states()
     return i
 
 
 if __name__ == "__main__":
     global EXAMPLE_RESULT_FILES, EXAMPLE_FILES, INPUT_FILES
     global EXAMPLE_RESULTS, EXAMPLES, INPUTS
-    global gen, dis, gen_optim, dis_optim, onestep, G_vis
+    global gen, dis, gen_optim, dis_optim, onestep, ta_surface, ta_clk
     print("Opening example results...")
     EXAMPLE_RESULT_FILES, EXAMPLE_RESULT_SRS = open_truncate_pad(EXAMPLE_RESULTS_DIR)
     if USE_REAL_AUDIO:
@@ -481,36 +537,46 @@ if __name__ == "__main__":
     else:
         print("Created", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
-    print("Creating networks...")
-    #gen = TAInstParamGenerator().cuda()
+    print("Creating models...")
     gen = TAGenerator().cuda()
     dis = TADiscriminator().cpu()
-    gen.apply(weights_init)
-    dis.apply(weights_init)
     gen_optim = torch.optim.Adam(gen.parameters(), lr=GENERATOR_LR, betas=(GENERATOR_BETA, 0.999))
     dis_optim = torch.optim.Adam(dis.parameters(), lr=DISCRIMINATOR_LR, betas=(DISCRIMINATOR_BETA, 0.999))
+    #gen = TAInstParamGenerator().cuda()
+    try:
+        checkpoint = torch.load(os.path.join(MODEL_DIR, "checkpoints", "checkpoint.pt"))
+        gen.load_state_dict(checkpoint['gen_state'])
+        dis.load_state_dict(checkpoint['dis_state'])
+        gen_optim.load_state_dict(checkpoint['gen_optim_state'])
+        dis_optim.load_state_dict(checkpoint['dis_optim_state'])
+        epoch = checkpoint['epoch']
+        print("!!!Loaded model states from saved checkpoints!!!")
+        print("Starting at epoch", epoch)
+    except:
+        gen.apply(weights_init)
+        dis.apply(weights_init)
+        epoch = 1
+        print("!!!Initialized models from scratch!!!")
 
     onestep = OneStep(gen)
-
-    print_global_constants()
     
     print("Initializing Visualizer...")
-    G_vis = init_gvis(800, 600)
+    pygame.init()
+    ta_surface = pygame.display.set_mode((800, 600))
+    ta_clk = pygame.time.Clock()
 
     if GEN_MODE in [5]:
         print("Creating CSound Interface...")
         result = G_csi.compile()
         if result != 0:
             raise RuntimeError("CSound compilation failed!")
-        #G_vis.watch_val(csi.param_gen(1))
-        #for i in range(10):
-        #    G_vis.watch_val(csi.param_gen(40+i))
         current_params = [0.]*N_PARAMS*TOTAL_PARAM_UPDATES
 
+    print_global_constants()
     print("Initialization complete! Starting...")
-    time.sleep(1)
+    time.sleep(3)
 
-    i = curses.wrapper(train_until_interrupt, G_vis, True)
+    i = curses.wrapper(train_until_interrupt, epoch, True)
     print("Generating...")
     if GEN_MODE in [5]:
         params = onestep.generate_one_step()
@@ -518,7 +584,8 @@ if __name__ == "__main__":
     else:
         data = onestep.generate_one_step()
     print("Done!")
-    G_csi.stop()
+    if G_csi:
+        G_csi.stop()
     amp, phase = my_hilbert(data)
     total_amps.append(amp)
     total_phases.append(phase)
@@ -526,3 +593,5 @@ if __name__ == "__main__":
     write_normalized_audio_to_disk(data, 'out1.wav')
 
     plot_metrics(i, save_to_disk=True)
+
+    pygame.quit()

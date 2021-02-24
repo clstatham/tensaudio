@@ -35,7 +35,7 @@ def hilbert_from_scratch(u):
     return v
 
 def my_hilbert(inp):
-    analytic_signal = scipy.signal.hilbert(inp)
+    analytic_signal = scipy.signal.hilbert(inp.detach().cpu().numpy())
     #analytic_signal = hilbert_from_scratch(inp)
     amplitude_envelope = np.abs(analytic_signal)
     instantaneous_phase = np.unwrap(np.angle(analytic_signal))

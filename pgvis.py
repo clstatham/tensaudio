@@ -14,6 +14,8 @@ class PGVisualizer():
         self.width = 0
         self.height = 0
         self.colors = []
+        self.q = None
+        self.clk = None
         specratio = 255*6 / N_PARAMS
         step = int(specratio)
         red = 255
@@ -42,27 +44,6 @@ class PGVisualizer():
     
     def to_pygame_coords(self, x, y):
         return x, self.height-y
-    
-    def init(self, width, height):
-        pygame.init()
-        self.width = width
-        self.height = height
-        self.yscale = height
-        self.surface = pygame.display.set_mode((width, height))
-    
-    def reset(self):
-        self.val_history = []
-
-    def deinit(self):
-        pygame.quit()
-
-    def watch_val(self, val_lambda):
-        self.watched_vals.append(val_lambda)
-
-    def handle_events(self):
-        for ev in pygame.event.get():
-            if ev == QUIT:
-                self.deinit()
 
     def update_vals(self):
         current_vals = []
@@ -73,11 +54,6 @@ class PGVisualizer():
             dif = len(self.val_history) - self.max_vals
             self.val_history = self.val_history[dif:self.max_vals]
             self.update_display()
-
-    def draw_metrics(self, img, size):
-        surf = pygame.image.fromstring(img, size, "RGB")
-        self.surface.blit(surf, (0,0))
-        pygame.display.flip()
 
     def update_display(self):
         self.surface.fill((50,50,50))
@@ -104,6 +80,7 @@ class PGVisualizer():
             
         pygame.display.flip()
 
+global G_vis
 G_vis = None
 def init_gvis(width, height):
     G_vis = PGVisualizer()
