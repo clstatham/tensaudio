@@ -1,3 +1,0 @@
-DPAM code credit to:
-https://gfx.cs.princeton.edu/pubs/Manocha_2020_ADP/
-Modifications by clstatham.

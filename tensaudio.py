@@ -10,6 +10,7 @@ from queue import Queue
 import timer3
 import ctcsound
 import librosa
+import librosa.display
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib import animation
@@ -28,11 +29,11 @@ from global_constants import *
 from helper import *
 from hilbert import *
 
-#torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(True)
 plt.switch_backend('agg')
 
 np.random.seed(int(round(time.time())))
-torch.random.seed()
+torch.random.manual_seed(int(round(time.time())))
 
 total_amps = []
 total_phases = []
@@ -40,6 +41,8 @@ total_gen_losses = []
 total_dis_losses = []
 total_real_verdicts = []
 total_fake_verdicts = []
+current_output = np.zeros(TOTAL_SAMPLES_OUT)
+current_example = np.zeros(TOTAL_SAMPLES_OUT)
 
 def clear_metrics():
     global total_gen_losses, total_dis_losses, total_fake_verdicts, total_real_verdicts
@@ -85,9 +88,9 @@ def plot_metrics(i, save_to_disk=False):
     if type(total_dis_losses) is torch.Tensor:
         total_dis_losses = total_dis_losses.detach().cpu().numpy()
     if len(total_gen_losses) + len(total_dis_losses) + len(total_real_verdicts) + len(total_fake_verdicts) > 0:
-        fig3, (ax1, ax2, ax3) = plt.subplots(3,1, figsize=[VIS_WIDTH//50,VIS_HEIGHT//50], dpi=50)
+        fig3, (ax1, ax2, ax3) = plt.subplots(3,1, figsize=[VIS_WIDTH//100,VIS_HEIGHT//50], dpi=50)
         fig3.subplots_adjust(hspace=0.5)
-        fig3.suptitle("Gen/Dis Losses " + timestamp)
+        plt.title("Gen/Dis Losses " + timestamp)
         ax1.set_title("Gen Losses")
         ax1.plot(range(len(total_gen_losses)), total_gen_losses, color="b")
         ax2.set_title("Dis Losses")
@@ -99,15 +102,50 @@ def plot_metrics(i, save_to_disk=False):
         canvas = agg.FigureCanvasAgg(fig3)
         canvas.draw()
         renderer = canvas.get_renderer()
-        raw_data = renderer.tostring_rgb()
+        plots_img = renderer.tostring_rgb()
         if save_to_disk and i % SAVE_EVERY_SECONDS == 0:
             os.mkdir(dirname)
             fig3.savefig(os.path.join(dirname, filename3))
-        size = canvas.get_width_height()
+        size_plots = canvas.get_width_height()
         plt.close()
-        surf = pygame.image.fromstring(raw_data, size, "RGB")
-        ta_surface.blit(surf, (0,0))
+
+        out_spec_fig = plt.figure(figsize=[VIS_WIDTH//100, VIS_HEIGHT//100], dpi=50)
+        plt.title('Output Spectrogram')
+        #spec_out = librosa.feature.melspectrogram(current_output, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
+        #librosa.display.specshow(librosa.power_to_db(spec_out, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
+        plt.specgram(current_output, N_FFT, mode='magnitude', scale='dB')
+        plt.colorbar(format='%+2.0f dB')
+        plt.tight_layout()
+        canvas = agg.FigureCanvasAgg(out_spec_fig)
+        canvas.draw()
+        renderer = canvas.get_renderer()
+        out_spec_img = renderer.tostring_rgb()
+        size_out_spec = canvas.get_width_height()
+        plt.close()
+
+        example_spec_fig = plt.figure(figsize=[VIS_WIDTH//100, VIS_HEIGHT//100], dpi=50)
+        plt.title('Example Spectrogram')
+        #spec_example = librosa.feature.melspectrogram(current_example, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
+        #librosa.display.specshow(librosa.power_to_db(spec_example, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
+        plt.specgram(current_example, N_FFT, mode='magnitude', scale='dB')
+        plt.colorbar(format='%+2.0f dB')
+        plt.tight_layout()
+        canvas = agg.FigureCanvasAgg(example_spec_fig)
+        canvas.draw()
+        renderer = canvas.get_renderer()
+        example_spec_img = renderer.tostring_rgb()
+        size_example_spec = canvas.get_width_height()
+        plt.close()
+
+        surf_plots = pygame.image.fromstring(plots_img, size_plots, "RGB")
+        surf_out_spec = pygame.image.fromstring(out_spec_img, size_out_spec, "RGB")
+        surf_example_spec = pygame.image.fromstring(example_spec_img, size_example_spec, "RGB")
+        ta_surface.blit(surf_plots, (0,0))
+        ta_surface.blit(surf_out_spec, (VIS_WIDTH//2, 0))
+        ta_surface.blit(surf_example_spec, (VIS_WIDTH//2, VIS_HEIGHT//2))
         pygame.display.flip()
+
+        yield
 
 def open_truncate_pad(name):
     ret = []
@@ -191,7 +229,7 @@ class OneStep():
             self.generator.eval()
             predicted_logits = self.generator(generate_input_noise())
             self.generator.train()
-        return predicted_logits
+        return torch.squeeze(predicted_logits)
 
 def create_input():
         #x = get_random_example()
@@ -254,43 +292,48 @@ def run_models(window, real):
     #fake_label = torch.as_tensor(FAKE_LABEL).to(torch.float).cuda()
 
     dis.zero_grad()
+    gen.zero_grad()
 
     y = dis(real)
     
-    real_verdict = y.mean()
-    label = torch.full(y.shape, REAL_LABEL).to(torch.float).cpu()
-    dis_loss_real = dis.criterion(label, y)
+    real_verdict = y.flatten().squeeze()
+    label = torch.full(real_verdict.shape, REAL_LABEL).to(torch.float).cpu()
+    dis_loss_real = dis.criterion(label, real_verdict)
     #dis_loss_real.backward(retain_graph=True)
 
     if GEN_MODE in [5]:
         noise = generate_input_noise()
         params = gen(noise)
         audio = get_output_from_params(params, window)
-        fake = audio.float().cuda()
+        fake = torch.squeeze(audio).float().cuda()
     else:
         noise = generate_input_noise()
         fake = gen(noise)
+
     y = dis(fake)
-    
-    fake_verdict = y.mean()
-    label = torch.full(y.shape, FAKE_LABEL).to(torch.float).cpu()
-    dis_loss_fake = dis.criterion(label, y)
+    fake_verdict = y.flatten().squeeze()
+    if torch.isnan(fake_verdict):
+        raise RuntimeError("Discriminator output NaN!")
+    label = torch.full(fake_verdict.shape, FAKE_LABEL).to(torch.float).cpu()
+    dis_loss_fake = dis.criterion(label, fake_verdict)
     #dis_loss_fake.backward(retain_graph=True)
     dis_loss = dis_loss_real + dis_loss_fake
     dis_loss.backward(retain_graph=True)
     dis_optim.step()
-    
-    gen.zero_grad()
 
     y = dis(fake)
-    fake_verdict = y.mean()
-    label = torch.full(y.shape, REAL_LABEL).to(torch.float).cuda()
-    gen_loss = gen.criterion(label, y)
+    fake_verdict = y.flatten().squeeze()
+    label = torch.full(fake_verdict.shape, REAL_LABEL).to(torch.float).cuda()
+    gen_loss = gen.criterion(label, fake_verdict)
     #gradients = torch.autograd.grad(outputs=fake_verdict, inputs=gen_loss, grad_outputs=real_label, create_graph=False, retain_graph=None, only_inputs=True)[0]
     #gp = ((gradients.norm(dim=1)-1)**2).mean() + fake_verdict
     gen_loss.backward()
     #gp.backward()
     gen_optim.step()
+
+    
+
+    
 
     #dis_params = str([p.grad for p in list(dis.parameters())])
     #gen_params = str([p.grad for p in list(gen.parameters())])
@@ -316,7 +359,7 @@ def run_models(window, real):
     total_real_verdicts.append(real_verdict.item())
     total_fake_verdicts.append(fake_verdict.item())
 
-    return gen_loss, dis_loss
+    return real, fake, gen_loss, dis_loss
 
 def save_states():
     torch.save({
@@ -328,10 +371,13 @@ def save_states():
     }, os.path.join(MODEL_DIR, "checkpoints", "checkpoint.pt"))
 
 def train_on_random(window, epoch, dirname):
+    global current_output, current_example
     while True:
-        z = torch.autograd.Variable(torch.as_tensor(create_input()), requires_grad=True).cuda()
+        z = torch.autograd.Variable(normalize_audio(torch.as_tensor(create_input())), requires_grad=True).cuda()
         begin_time = time.time()
-        gen_loss, dis_loss = run_models(window, z)
+        real, fake, gen_loss, dis_loss = run_models(window, z)
+        current_output = normalize_audio(fake.clone().detach()).cpu().numpy()
+        current_example = normalize_audio(real.clone().detach()).cpu().numpy()
         total_gen_losses.append(gen_loss.clone().detach().cpu().numpy())
         total_dis_losses.append(dis_loss.clone().detach().cpu().numpy())
         window.move(8,0)
@@ -450,7 +496,7 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                     pass
             avg_iters_per_sec = epoch / time_passed
             if save_plots:
-                plot_metrics(epoch, save_to_disk=False)
+                next(plot_metrics(epoch, save_to_disk=False))
             if SAVE_EVERY_SECONDS > 0 and avg_iters_per_sec > 0 and epoch / avg_iters_per_sec % float(SAVE_EVERY_SECONDS) < 1.0 / avg_iters_per_sec:
                 time_since_last_save = -1
                 try:
@@ -466,7 +512,7 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                     os.mkdir(dirname)
                 begin_time = time.time()
                 if save_plots:
-                    img, size = plot_metrics(epoch, save_to_disk=True)
+                    next(plot_metrics(epoch, save_to_disk=True))
                 if GEN_MODE in [5]:
                     params = onestep.generate_one_step()
                     out1 = get_output_from_params(params, window)
@@ -540,8 +586,10 @@ if __name__ == "__main__":
     print("Creating models...")
     gen = TAGenerator().cuda()
     dis = TADiscriminator().cpu()
-    gen_optim = torch.optim.Adam(gen.parameters(), lr=GENERATOR_LR, betas=(GENERATOR_BETA, 0.999))
+    gen_optim = torch.optim.RMSprop(gen.parameters(), lr=GENERATOR_LR, momentum=GENERATOR_MOMENTUM)
+    #gen_optim = torch.optim.Adam(gen.parameters(), lr=GENERATOR_LR, betas=(GENERATOR_BETA, 0.999))
     dis_optim = torch.optim.Adam(dis.parameters(), lr=DISCRIMINATOR_LR, betas=(DISCRIMINATOR_BETA, 0.999))
+    #dis_optim = torch.optim.RMSprop(dis.parameters(), lr=DISCRIMINATOR_LR, momentum=DISCRIMINATOR_MOMENTUM)
     #gen = TAInstParamGenerator().cuda()
     try:
         checkpoint = torch.load(os.path.join(MODEL_DIR, "checkpoints", "checkpoint.pt"))

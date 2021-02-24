@@ -385,10 +385,13 @@ def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, g
     else:
       return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s))
   #return tf.reshape(t, (N_BATCHES, 2, 1))
-def normalize_audio(a):
-  return a/torch.max(torch.abs(a))
-def write_normalized_audio_to_disk(a, fn):
-  scaled = np.int16(normalize_audio(a).detach().cpu().numpy() * 32767)
+def normalize_audio(tensor):
+  # Subtract the mean, and scale to the interval [-1,1]
+  tensor_minusmean = tensor - tensor.mean()
+  return tensor_minusmean/tensor_minusmean.abs().max()
+def write_normalized_audio_to_disk(sig, fn):
+  sig_numpy = normalize_audio(sig.clone().detach().cpu()).numpy()
+  scaled = np.int16(sig_numpy * 32767)
   soundfile.write(fn, scaled, SAMPLE_RATE, SUBTYPE)
 
 class FFTWithGradients(Function):

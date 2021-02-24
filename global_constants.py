@@ -1,6 +1,6 @@
 RESOURCES_DIR = "D:\\tensaudio_resources"
 EXAMPLES_DIR = "fire"
-EXAMPLE_RESULTS_DIR = "synthloops"
+EXAMPLE_RESULTS_DIR = "snares"
 INPUTS_DIR = "inputs_kicks"
 
 PLOTS_DIR = "D:\\tensaudio_plots"
@@ -8,9 +8,11 @@ TRAINING_DIR = "D:\\tensaudio_training"
 
 MODEL_DIR = "D:\\tensaudio_models"
 
-# must be divisible by 50
+# must be divisible by 100
 VIS_WIDTH = 1600
 VIS_HEIGHT = 900
+
+N_FFT = 512
 
 # set to 0 to run until Ctrl+C is input in the terminal
 MAX_ITERS = 0
@@ -20,11 +22,11 @@ SLEEP_TIME = 0.001
 MAX_ITERS_PER_SEC = 0
 
 # set to 0 to disable periodically generating progress updates
-SAVE_EVERY_SECONDS = 5*60
+SAVE_EVERY_SECONDS = 60
 # set to 0 to disable periodically saving model
 SAVE_MODEL_EVERY_ITERS = 500
 
-VERBOSITY_LEVEL = 0 # 0, 1, 2
+VERBOSITY_LEVEL = 1 # 0, 1, 2
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
@@ -35,11 +37,11 @@ GEN_MODE = 3            # 0 = RNN/Hilbert mode
                         # 3 = Conv/Audio mode
                         # 5 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
-SAMPLE_RATE = 8000
+SAMPLE_RATE = 12000
 SUBTYPE = 'PCM_16'
-INPUT_DURATION = 4 / SAMPLE_RATE
-OUTPUT_DURATION = 1
-GEN_KERNEL_SIZE = 1
+INPUT_DURATION = 16 / SAMPLE_RATE
+OUTPUT_DURATION = 0.5
+GEN_KERNEL_SIZE = 2
 # RNN mode only
 N_RNN_LAYERS = 4
 # CSound mode only
@@ -50,12 +52,13 @@ PARAM_UPDATE_SAMPLES = SAMPLE_RATE*OUTPUT_DURATION
 TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
 # Non-CSound mode only
 DESIRED_PROCESS_UNITS = 1024
-N_PROCESS_LAYERS = 64
+N_PROCESS_LAYERS = 8
 BATCH_OPTIMIZATION_FACTOR = 4000
 
 # Hyperparameters
-GENERATOR_LR = 0.00005
-GENERATOR_BETA = 0.3
+GENERATOR_LR = 0.2
+GENERATOR_BETA = 0.5
+GENERATOR_MOMENTUM = 0.05
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/dis_ckpts folder or the discsriminator model will give
@@ -68,10 +71,13 @@ REAL_LABEL = 1.
 FAKE_LABEL = 0.
 N_DIS_LAYERS = 4
 DIS_KERNEL_SIZE = 1
+DIS_N_FFT = 512
+DIS_HOP_LEN = 64
+DIS_N_MELS = 128
 
 # Hyperparameters
 DISCRIMINATOR_LR = 0.0001
-DISCRIMINATOR_BETA = 0.15
+DISCRIMINATOR_BETA = 0.5
 
 
 
