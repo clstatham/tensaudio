@@ -85,8 +85,8 @@ def plot_metrics(i, save_to_disk=False):
     if type(total_dis_losses) is torch.Tensor:
         total_dis_losses = total_dis_losses.detach().cpu().numpy()
     if len(total_gen_losses) + len(total_dis_losses) + len(total_real_verdicts) + len(total_fake_verdicts) > 0:
-        fig3, (ax1, ax2, ax3) = plt.subplots(3,1, figsize=[8,6], dpi=100)
-        fig3.subplots_adjust(hspace=1)
+        fig3, (ax1, ax2, ax3) = plt.subplots(3,1, figsize=[VIS_WIDTH//50,VIS_HEIGHT//50], dpi=50)
+        fig3.subplots_adjust(hspace=0.5)
         fig3.suptitle("Gen/Dis Losses " + timestamp)
         ax1.set_title("Gen Losses")
         ax1.plot(range(len(total_gen_losses)), total_gen_losses, color="b")
@@ -387,10 +387,10 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
     window.addstr(0,0, "="*80)
     window.addstr(1,0, "MODEL TRAINING STARTED AT "+timestamp)
     window.addstr(2,0, "="*80)
-    window.addstr(3,40, "Visualizer key commands:")
-    window.addstr(4,40, "s = save checkpoint")
-    window.addstr(5,40, "c = clear metrics")
-    window.addstr(4,60, "x = save & exit")
+    window.addstr(3,41, "Visualizer key commands:")
+    window.addstr(4,41, "s = save checkpoint")
+    window.addstr(5,41, "c = clear metrics")
+    window.addstr(4,61, "x = save & exit")
     window.refresh()
     
     if MAX_ITERS == 0:
@@ -562,7 +562,7 @@ if __name__ == "__main__":
     
     print("Initializing Visualizer...")
     pygame.init()
-    ta_surface = pygame.display.set_mode((800, 600))
+    ta_surface = pygame.display.set_mode((VIS_WIDTH, VIS_HEIGHT))
     ta_clk = pygame.time.Clock()
 
     if GEN_MODE in [5]:

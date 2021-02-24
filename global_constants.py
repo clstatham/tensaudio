@@ -8,6 +8,10 @@ TRAINING_DIR = "D:\\tensaudio_training"
 
 MODEL_DIR = "D:\\tensaudio_models"
 
+# must be divisible by 50
+VIS_WIDTH = 1600
+VIS_HEIGHT = 900
+
 # set to 0 to run until Ctrl+C is input in the terminal
 MAX_ITERS = 0
 RUN_FOR_SEC = 0
