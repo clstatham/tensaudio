@@ -1,35 +1,33 @@
 import collections
+import curses
 import os
 import time
 from datetime import datetime
-import curses
 
-import pygame
-from pygame.locals import *
-from queue import Queue
-import timer3
 import ctcsound
 import librosa
 import librosa.display
-import matplotlib.pyplot as plt
-from matplotlib import cm
-from matplotlib import animation
 import matplotlib.backends.backend_agg as agg
+import matplotlib.pyplot as plt
 import numpy as np
+import pygame
 import scipy.io.wavfile
 import six
 import soundfile
+import timer3
 import torch
 import torch.nn as nn
+from matplotlib import animation, cm
+from pygame.locals import *
 
-from csoundinterface import CsoundInterface, CSIRun, G_csi
+from csoundinterface import CSIRun, CsoundInterface, G_csi
 from discriminator import TADiscriminator
 from generator import TAGenerator, TAInstParamGenerator
 from global_constants import *
 from helper import *
 from hilbert import *
 
-torch.autograd.set_detect_anomaly(True)
+#torch.autograd.set_detect_anomaly(True)
 plt.switch_backend('agg')
 
 np.random.seed(int(round(time.time())))
