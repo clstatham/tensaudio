@@ -111,7 +111,7 @@ def plot_metrics(i, save_to_disk=False):
         plt.title('Output Spectrogram')
         #spec_out = librosa.feature.melspectrogram(current_output, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
         #librosa.display.specshow(librosa.power_to_db(spec_out, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
-        plt.specgram(current_output, N_FFT, mode='magnitude', scale='dB')
+        plt.specgram(current_output, VIS_N_FFT, mode='magnitude', scale='dB', cmap='magma')
         plt.colorbar(format='%+2.0f dB')
         plt.tight_layout()
         canvas = agg.FigureCanvasAgg(out_spec_fig)
@@ -125,7 +125,7 @@ def plot_metrics(i, save_to_disk=False):
         plt.title('Example Spectrogram')
         #spec_example = librosa.feature.melspectrogram(current_example, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
         #librosa.display.specshow(librosa.power_to_db(spec_example, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
-        plt.specgram(current_example, N_FFT, mode='magnitude', scale='dB')
+        plt.specgram(current_example, VIS_N_FFT, mode='magnitude', scale='dB', cmap='magma')
         plt.colorbar(format='%+2.0f dB')
         plt.tight_layout()
         canvas = agg.FigureCanvasAgg(example_spec_fig)
@@ -191,7 +191,7 @@ def get_random_example():
 def get_example_result(idx):
     x = EXAMPLE_RESULTS[idx]
     if len(x) < TOTAL_SAMPLES_OUT:
-        x = np.concatenate((x, [0]*(TOTAL_SAMPLES_OUT-len(x))))
+        x = torch.cat((x, torch.zeros(TOTAL_SAMPLES_OUT-len(x))))
 
     x = x[:TOTAL_SAMPLES_OUT]
     return normalize_audio(x)
@@ -290,13 +290,12 @@ def run_models(window, real):
     #fake_label = torch.as_tensor(FAKE_LABEL).to(torch.float).cuda()
 
     dis.zero_grad()
-    gen.zero_grad()
 
     y = dis(real)
     
-    real_verdict = y.flatten().squeeze()
-    label = torch.full(real_verdict.shape, REAL_LABEL).to(torch.float).cpu()
-    dis_loss_real = dis.criterion(label, real_verdict)
+    real_verdict = y.flatten().squeeze().mean()
+    label = torch.full(y.shape, REAL_LABEL).to(torch.float).cpu()
+    dis_loss_real = dis.criterion(label, y)
     #dis_loss_real.backward(retain_graph=True)
 
     if GEN_MODE in [5]:
@@ -307,38 +306,38 @@ def run_models(window, real):
     else:
         noise = generate_input_noise()
         fake = gen(noise)
-
-    y = dis(fake)
-    fake_verdict = y.flatten().squeeze()
+    fake_for_dis = fake.clone().detach()
+    y = dis(fake_for_dis)
+    fake_verdict = y.flatten().squeeze().mean()
     if torch.isnan(fake_verdict):
         raise RuntimeError("Discriminator output NaN!")
-    label = torch.full(fake_verdict.shape, FAKE_LABEL).to(torch.float).cpu()
-    dis_loss_fake = dis.criterion(label, fake_verdict)
+    label = torch.full(y.shape, FAKE_LABEL).to(torch.float).cpu()
+    dis_loss_fake = dis.criterion(label, y)
     #dis_loss_fake.backward(retain_graph=True)
     dis_loss = dis_loss_real + dis_loss_fake
-    dis_loss.backward(retain_graph=True)
+    dis_loss.backward(retain_graph=False)
     dis_optim.step()
 
-    y = dis(fake)
-    fake_verdict = y.flatten().squeeze()
-    label = torch.full(fake_verdict.shape, REAL_LABEL).to(torch.float).cuda()
-    gen_loss = gen.criterion(label, fake_verdict)
+    gen.zero_grad()
+
+    if GEN_MODE in [5]:
+        noise = generate_input_noise()
+        params = gen(noise)
+        audio = get_output_from_params(params, window)
+        fake = torch.squeeze(audio).float().cuda()
+    else:
+        noise = generate_input_noise()
+        fake = gen(noise)
+    fake_for_dis = fake.clone().detach()
+    y = dis(fake_for_dis)
+    fake_verdict = y.flatten().squeeze().mean()
+    label = torch.full(y.shape, REAL_LABEL).to(torch.float).cuda()
+    gen_loss = gen.criterion(label, y)
     #gradients = torch.autograd.grad(outputs=fake_verdict, inputs=gen_loss, grad_outputs=real_label, create_graph=False, retain_graph=None, only_inputs=True)[0]
     #gp = ((gradients.norm(dim=1)-1)**2).mean() + fake_verdict
     gen_loss.backward()
     #gp.backward()
     gen_optim.step()
-
-    
-
-    
-
-    #dis_params = str([p.grad for p in list(dis.parameters())])
-    #gen_params = str([p.grad for p in list(gen.parameters())])
-    #print(gen_params)
-    #print("+++++++++++++++++++++++++++++++++++++++++")
-    #print(dis_params)
-    
 
     try:
         window.move(6,0)
@@ -493,7 +492,7 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                 except curses.error:
                     pass
             avg_iters_per_sec = epoch / time_passed
-            if save_plots:
+            if save_plots and epoch % VIS_UPDATE_INTERVAL == 0:
                 next(plot_metrics(epoch, save_to_disk=False))
             if SAVE_EVERY_SECONDS > 0 and avg_iters_per_sec > 0 and epoch / avg_iters_per_sec % float(SAVE_EVERY_SECONDS) < 1.0 / avg_iters_per_sec:
                 time_since_last_save = -1

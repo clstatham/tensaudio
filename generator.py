@@ -91,9 +91,9 @@ class TAGenerator(nn.Module):
         self.kernel_size = GEN_KERNEL_SIZE
         self.padding = 0
         self.padding_mode = 'zeros'
-        self.dilation = 1
+        self.dilation = 8
         self.output_padding = 0
-        self.stride = 8
+        self.stride = 1
 
         v_cprint("*-"*39 + "*")
 
@@ -108,44 +108,47 @@ class TAGenerator(nn.Module):
 
         Lout = 0
         Lin = TOTAL_SAMPLES_IN
-        while Lout*N_BATCHES*10 < self.desired_process_units:
-            Lout=self.n_preprocessing_indices*(Lin-1)*self.stride-2*self.padding*self.dilation*(self.kernel_size-1)*self.output_padding+1
-            vv_cprint("Creating deconvolution layer", Lin, ">", Lout, "ksz =", self.kernel_size, "stride =", self.stride, "total =", N_BATCHES*N_CHANNELS*Lout)
-            Lout = min(Lout, self.desired_process_units)
+        magic = 1 # TODO: get rid of this
+        n_batches = 1
+        while Lout < self.desired_process_units:
+            Lout=2*((Lin-1)*self.stride-2*self.padding*self.dilation*(self.kernel_size-1)*self.output_padding+1)**(2*self.n_preprocessing_indices)
+            vv_cprint("Creating deconvolution layer", Lin, ">", Lout, "ksz =", self.kernel_size, "stride =", self.stride, "total =", n_batches*DESIRED_PROCESS_UNITS_FACTOR*Lout)            
+            Lout = int(min(Lout, self.desired_process_units))
             self.preprocess_layers.append(nn.ConvTranspose1d(Lin, Lout, kernel_size=self.kernel_size, stride=self.stride, padding=self.padding, padding_mode=self.padding_mode, output_padding=self.output_padding, dilation=self.dilation).cuda())
             Lin  = Lout
             self.n_preprocessing_indices += 1
-        self.preprocess_layers.append(nn.Flatten())
+        #self.preprocess_layers.append(nn.Flatten())
         v_cprint("Created", self.n_preprocessing_indices+1, "preprocessing layers.")
 
-        if GEN_MODE in [5]:
-            self.n_process_units = TOTAL_SAMPLES_IN
-        else:
-            #self.n_process_units = Lout*N_BATCHES*N_CHANNELS*(TOTAL_SAMPLES_IN//2)
-            self.n_process_units = int(Lout*N_BATCHES)
-        print("Creating", N_PROCESS_LAYERS, "Linear layers", self.n_process_units, ">", self.n_process_units)
-        for i in range(N_PROCESS_LAYERS):
-            self.process_layers.append(nn.Linear(self.n_process_units, self.n_process_units).cuda())
+        n_batches = int(Lout // (N_CHANNELS * self.kernel_size * BATCH_OPTIMIZATION_FACTOR))
+        #self.n_process_units = Lout * n_batches * DESIRED_PROCESS_UNITS_FACTOR
+        #assert(self.n_process_units <= self.desired_process_units)
+        #print("Creating", N_PROCESS_LAYERS, "Linear layers", self.n_process_units, ">", self.n_process_units)
+        #for i in range(N_PROCESS_LAYERS):
+            #self.process_layers.append(nn.Linear(self.n_process_units, self.n_process_units).cuda())
+        #self.process_layers.append(nn.BatchNorm1d(Lout))
         v_cprint("Created", len(self.process_layers), "processing layers.")
 
-        Lin = self.n_process_units
+        Lin = Lout
         Lout = 0
-        while Lout*N_BATCHES*10 < self.total_samp_out:
-            Lout=self.n_postprocessing_indices*(Lin-1)*self.stride-2*self.padding*self.dilation*(self.kernel_size-1)*self.output_padding+1
-            Lout = min(Lout, self.total_samp_out)
+        while Lout*N_BATCHES < TOTAL_SAMPLES_OUT:
+            Lout=2*((Lin-1)*self.stride-2*self.padding*self.dilation*(self.kernel_size-1)*self.output_padding+1)**(2*self.n_postprocessing_indices)
+            #n_batches = int(Lout // (N_CHANNELS * self.kernel_size * BATCH_OPTIMIZATION_FACTOR))
+            Lout = int(min(Lout, TOTAL_SAMPLES_OUT))
             vv_cprint("Creating deconvolution layer", Lin, ">", Lout, "ksz =", self.kernel_size, "stride =", self.stride, "total =", N_BATCHES*N_CHANNELS*Lout)
-            self.postprocess_layers.append(nn.ConvTranspose1d(Lin, Lout, kernel_size=self.kernel_size, stride=self.stride, padding=self.padding, padding_mode=self.padding_mode, output_padding=self.output_padding, dilation=self.dilation).cuda())
+            self.postprocess_layers.append(nn.ConvTranspose1d(Lin, Lout, kernel_size=1, stride=self.stride, padding=self.padding, padding_mode=self.padding_mode, output_padding=self.output_padding, dilation=self.dilation).cuda())
             Lin  = Lout
             self.n_postprocessing_indices += 1
-        self.postprocess_layers.append(nn.Flatten())
+        #self.postprocess_layers.append(nn.ConvTranspose1d(Lout, int(Lout*2), kernel_size=1, stride=1))
+        Lout *= int(N_BATCHES)
+        assert(Lout >= self.total_samp_out)
         v_cprint("Created", self.n_postprocessing_indices+1, "postprocessing layers.")
 
-        v_cprint("Creating Linear Layer.")
+        v_cprint("Creating final layer.")
         #self.final_layer = nn.ReLU().cuda()
         #Lout=self.n_postprocessing_indices*(Lin-1)*self.stride-2*self.padding*self.dilation*(self.kernel_size-1)*self.output_padding+1
-        Lout = int(Lout*N_BATCHES)
+        #assert(Lout*N_BATCHES >= int(self.total_samp_out) and Lout*N_BATCHES <= int(self.total_samp_out*2))
         self.final_layers = [
-            nn.Linear(Lout, self.total_samp_out),
             nn.Flatten(),
         ]
         
@@ -155,64 +158,29 @@ class TAGenerator(nn.Module):
         self.postprocess_layers = nn.Sequential(*self.postprocess_layers).cuda()
         self.final_layers = nn.Sequential(*self.final_layers).cuda()
 
-    def gen_rnn(self, inputs):
-        assert(GEN_MODE == 1)
-
-        audio = inputs
-
-        audio = prep_data_for_batch_operation(audio)
-
-        if self.rnn_state is None:
-            f_state1, f_state2 = self.audio_rnns[0].get_initial_state(audio)
-            #f_state1 = None
-            #b_state1 = self.audio_rnns[0].backward_layer.get_initial_state(audio)
-            #f_state1 = f_state1[0]
-        else:
-            #f_state1, b_state1 = self.rnn_state
-            f_state1 = self.rnn_state
-        #b_state1 = b_state1[0]
-
-        vv_cprint("|} Ready for launch! Going to the net now, wheeee!")
-
-        audio, f_state1, f_state2 = self.audio_rnns[0](audio, initial_state=(f_state1, f_state2), training=training)
-        vv_cprint("|} Layer 1 done.")
-        for i in range(N_RNN_LAYERS-1):
-            audio = prep_data_for_batch_operation(audio)
-            #audio = tf.expand_dims(audio, axis=0)
-            audio, f_state1, f_state2 = self.audio_rnns[i+1](audio, initial_state=(f_state1, f_state2), training=training)
-            vv_cprint("|}} Layer", i+2, "done.")
-
-        vv_cprint("|} Whew... Made it out of the net alive!")
-
-        #self.rnn_state = (f_state1, f_state2)
-        audio = K.flatten(audio)
-        return audio
-
     def run_dense_net(self, data, hilb_mode=False):
         pre_init = data.flatten()
         vv_cprint("|}} Initial data.shape:", pre_init.shape)
         post_init = self.initial_layers.forward(pre_init.float())
 
-        Lin = TOTAL_SAMPLES_IN
-        Lout = (Lin-1)*self.stride-2*self.padding*self.dilation*(self.kernel_size-1)*self.output_padding+1
         pre_preprocess, _ = DataBatchPrep.apply(data.clone(), None, TOTAL_SAMPLES_IN, 1)
 
         vv_cprint("|}} Initial layers done.")
         vv_cprint("|}} data.shape:", pre_preprocess.shape)
         post_preprocess = self.preprocess_layers.forward(pre_preprocess)
+        #pre_process, _ = DataBatchPrep.apply(post_preprocess.clone(), BAT, 1, None)
+        #vv_cprint("|}} data.shape going into process layers:", pre_process.shape)
+        #post_process = self.process_layers.forward(pre_process)
+        #vv_cprint("|}} Process layers done.")
+        #vv_cprint("|}} data.shape:", post_process.shape)
 
-        vv_cprint("|}} data.shape going into process layers:", post_preprocess.shape)
-        post_process = self.process_layers.forward(post_preprocess)
-        vv_cprint("|}} Process layers done.")
-        vv_cprint("|}} data.shape:", post_process.shape)
-
-        Lin = self.n_process_units
-        Lout = (Lin-1)*self.stride-2*self.padding*self.dilation*(self.kernel_size-1)*self.output_padding+1
-        pre_postprocess, _ = DataBatchPrep.apply(post_process.clone(), None, Lin, 1)
+        pre_postprocess, _ = DataBatchPrep.apply(post_preprocess.clone(), None, self.desired_process_units, 1)
 
         post_postprocess = self.postprocess_layers.forward(pre_postprocess)
+        vv_cprint("|}} Postprocess layers done.")
+        vv_cprint("|}} data.shape:", post_postprocess.shape)
         
-        post_final = self.final_layers.forward(post_postprocess)
+        post_final = self.final_layers.forward(post_postprocess).flatten()
         vv_cprint("|}} Final layer done.")
         vv_cprint("|}} Final data.shape:", post_final.shape)
         return post_final
@@ -240,8 +208,7 @@ class TAGenerator(nn.Module):
     def gen_dense(self, inputs):
         assert(GEN_MODE in (2, 3))
         vv_cprint("|} Ready for launch! Going to the net now, wheeee!")
-        prepped, _ = DataBatchPrep.apply(inputs, N_BATCHES, N_CHANNELS, None)
-        post_net = torch.zeros(self.total_samp_out, requires_grad=True)
+        prepped, _ = DataBatchPrep.apply(inputs, 1, TOTAL_SAMPLES_IN, None)
         post_net = self.run_dense_net(prepped, hilb_mode=False)[:self.total_samp_out].squeeze()
         if not torch.is_nonzero(post_net[0]):
             print("Warning, got invalid output!")
@@ -250,11 +217,13 @@ class TAGenerator(nn.Module):
 
     def gen_fn(self, inputs):
         if GEN_MODE == 0:
-            amp, phase = my_hilbert(inputs)
-            amp, phase = self.gen_rnn_hilb(torch.stack((amp, phase)).cuda())
-            return inverse_hilbert(amp, phase)
+            #amp, phase = my_hilbert(inputs)
+            #amp, phase = self.gen_rnn_hilb(torch.stack((amp, phase)).cuda())
+            #return inverse_hilbert(amp, phase)
+            return None
         if GEN_MODE == 1:
-            return self.gen_rnn(inputs)
+            return None
+            #return self.gen_rnn(inputs)
         if GEN_MODE == 2:
             amp, phase = my_hilbert(inputs)
             amp, phase = self.gen_dense_hilb(torch.stack((amp, phase)).cuda())

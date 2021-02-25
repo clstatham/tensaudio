@@ -348,7 +348,7 @@ class DataBatchPrep(Function):
     ctx.save_for_backward(torch.empty_like(inp))
     ctx.mark_dirty(inp)
     inp_ = inp.detach()
-    return inp.new(prep_data_for_batch_operation(inp_, exp_batches, exp_channels, exp_timesteps, greedy=False, return_shape=False)), inp
+    return inp.new(prep_data_for_batch_operation(inp_, exp_batches, exp_channels, exp_timesteps, greedy=False, return_shape=False).to(inp.device)), inp
   def backward(ctx, grad_output, dummy):
     if grad_output is None:
       return None, None, None, None
