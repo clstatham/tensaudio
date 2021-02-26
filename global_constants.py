@@ -9,23 +9,23 @@ TRAINING_DIR = "D:\\tensaudio_training"
 MODEL_DIR = "D:\\tensaudio_models"
 
 # must be divisible by 100
-VIS_WIDTH = 1600
-VIS_HEIGHT = 900
-VIS_UPDATE_INTERVAL = 100 # iterations
+VIS_WIDTH = 1200
+VIS_HEIGHT = 700
+VIS_UPDATE_INTERVAL = 1 # iterations
 
-VIS_N_FFT = 1024
+VIS_N_FFT = 2**12
 
-# set to 0 to run until Ctrl+C is input in the terminal
+# set to 0 to run until visualizer is closed
 MAX_ITERS = 0
 RUN_FOR_SEC = 0
 
-SLEEP_TIME = 0.001
+SLEEP_TIME = 0
 MAX_ITERS_PER_SEC = 0
 
 # set to 0 to disable periodically generating progress updates
-SAVE_EVERY_SECONDS = 60*10
+SAVE_EVERY_SECONDS = 0
 # set to 0 to disable periodically saving model
-SAVE_MODEL_EVERY_ITERS = 5000
+SAVE_MODEL_EVERY_ITERS = 10000
 
 VERBOSITY_LEVEL = 1 # 0, 1, 2
 
@@ -38,47 +38,50 @@ GEN_MODE = 3            # 0 = RNN/Hilbert mode
                         # 3 = Conv/Audio mode
                         # 5 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
-SAMPLE_RATE = 44100
+SAMPLE_RATE = 22050
+GEN_SAMPLE_RATE_FACTOR = 1
 SUBTYPE = 'PCM_16'
-INPUT_DURATION = 2**6 / SAMPLE_RATE
-OUTPUT_DURATION = 2**18 / SAMPLE_RATE # power of 2 samples
-GEN_KERNEL_SIZE = 1
+INPUT_DURATION = 2**8 / SAMPLE_RATE
+OUTPUT_DURATION = 2**16 / SAMPLE_RATE # power of 2 samples
+GEN_KERNEL_SIZE = 2
+N_GEN_LAYERS = 1
 # RNN mode only
 N_RNN_LAYERS = 4
 # CSound mode only
-N_GEN_LAYERS = 2
 N_PARAMS = 64
 KONTROL_SAMPLES = 64
 PARAM_UPDATE_SAMPLES = SAMPLE_RATE*OUTPUT_DURATION
 TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
 # Non-CSound mode only
-DESIRED_PROCESS_UNITS_FACTOR = 2
 N_PROCESS_LAYERS = 4
-BATCH_OPTIMIZATION_FACTOR = 2**11 # also a power of 2
+BATCH_SIZE = 2**14 # also a power of 2, lower = more efficient but lower quality
 
 # Hyperparameters
-GENERATOR_LR = 0.3
-#GENERATOR_BETA = 0.5
-GENERATOR_MOMENTUM = 0.08
+GENERATOR_LR = 0.0001
+GENERATOR_BETA = 0.5
+#GENERATOR_MOMENTUM = 0.02
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/dis_ckpts folder or the discsriminator model will give
 # an error!
 INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
                         # 'conv' = comparison of example and convolved example result
-DIS_MODE = 1            # 0 = Hilbert mode
-                        # 1 = FFT mode
+DIS_MODE = 0            # 0 = FFT mode
+                        # 1 = Mel spectrogram mode
+                        # 2 = Direct mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
-N_DIS_LAYERS = 4
-DIS_KERNEL_SIZE = 1
-DIS_N_FFT = 2**14
+N_DIS_LAYERS = 3
+DIS_KERNEL_SIZE = 256
+DIS_N_FFT = 2**11
 #DIS_HOP_LEN = 64
 DIS_N_MELS = 128
+DIS_FFT_VAL = 128
 
 # Hyperparameters
-DISCRIMINATOR_LR = 0.001
+DISCRIMINATOR_LR = 0.0015
 DISCRIMINATOR_BETA = 0.5
+#DISCRIMINATOR_MOMENTUM = 0.2
 
 
 
@@ -99,10 +102,9 @@ if GEN_MODE in [0, 2]:
 else:
     N_CHANNELS = 1
 
-N_BATCHES = int(TOTAL_SAMPLES_OUT // (N_CHANNELS * GEN_KERNEL_SIZE * BATCH_OPTIMIZATION_FACTOR))
-if TOTAL_SAMPLES_OUT % (N_CHANNELS * GEN_KERNEL_SIZE * BATCH_OPTIMIZATION_FACTOR) != 0:
-    raise ValueError("Could not calculate N_BATCHES: Total length of audio not divisible by", (N_CHANNELS * GEN_KERNEL_SIZE * BATCH_OPTIMIZATION_FACTOR))
-DESIRED_PROCESS_UNITS = N_BATCHES * DESIRED_PROCESS_UNITS_FACTOR
+N_BATCHES = int(TOTAL_SAMPLES_OUT // (GEN_KERNEL_SIZE * BATCH_SIZE))
+if TOTAL_SAMPLES_OUT % (GEN_KERNEL_SIZE * BATCH_SIZE) != 0:
+    raise ValueError("Could not calculate N_BATCHES: Total length of audio not divisible by", (BATCH_SIZE))
 N_TIMESTEPS_PER_KERNEL = int(SAMPLE_RATE*OUTPUT_DURATION // (GEN_KERNEL_SIZE * N_BATCHES))
 SAMPLES_PER_BATCH = int(TOTAL_SAMPLES_OUT // N_BATCHES)
 if TOTAL_SAMPLES_OUT % N_BATCHES != 0:

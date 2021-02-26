@@ -17,6 +17,8 @@ import soundfile
 import timer3
 import torch
 import torch.nn as nn
+import torch.autograd as ag
+import torchaudio
 from matplotlib import animation, cm
 from pygame.locals import *
 
@@ -27,6 +29,7 @@ from global_constants import *
 from helper import *
 from hilbert import *
 
+#os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 #torch.autograd.set_detect_anomaly(True)
 plt.switch_backend('agg')
 
@@ -41,6 +44,7 @@ total_real_verdicts = []
 total_fake_verdicts = []
 current_output = np.zeros(TOTAL_SAMPLES_OUT)
 current_example = np.zeros(TOTAL_SAMPLES_OUT)
+vis_paused = False
 
 def clear_metrics():
     global total_gen_losses, total_dis_losses, total_fake_verdicts, total_real_verdicts
@@ -111,8 +115,8 @@ def plot_metrics(i, save_to_disk=False):
         plt.title('Output Spectrogram')
         #spec_out = librosa.feature.melspectrogram(current_output, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
         #librosa.display.specshow(librosa.power_to_db(spec_out, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
-        plt.specgram(current_output, VIS_N_FFT, mode='magnitude', scale='dB', cmap='magma')
-        plt.colorbar(format='%+2.0f dB')
+        plt.specgram(current_output, VIS_N_FFT, mode='magnitude', cmap='magma')
+        plt.colorbar(format='%+2.0f')
         plt.tight_layout()
         canvas = agg.FigureCanvasAgg(out_spec_fig)
         canvas.draw()
@@ -125,8 +129,8 @@ def plot_metrics(i, save_to_disk=False):
         plt.title('Example Spectrogram')
         #spec_example = librosa.feature.melspectrogram(current_example, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
         #librosa.display.specshow(librosa.power_to_db(spec_example, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
-        plt.specgram(current_example, VIS_N_FFT, mode='magnitude', scale='dB', cmap='magma')
-        plt.colorbar(format='%+2.0f dB')
+        plt.specgram(current_example, VIS_N_FFT, mode='magnitude', cmap='magma')
+        plt.colorbar(format='%+2.0f')
         plt.tight_layout()
         canvas = agg.FigureCanvasAgg(example_spec_fig)
         canvas.draw()
@@ -163,9 +167,10 @@ def iterate_and_resample(files, srs):
         fil = files[i]
         if len(fil.shape) > 1 and fil.shape[1] != 1:
             fil = fil.permute(1,0)[0]
-        fortfil = np.asfortranarray(fil.detach().cpu().numpy())
-        a = librosa.resample(fortfil, srs[i].item(), SAMPLE_RATE)
-        a = torch.from_numpy(a).requires_grad_(True)
+        #fortfil = np.asfortranarray(fil.detach().requires_grad_(True).cpu().numpy())
+        #a = librosa.resample(fortfil, srs[i].item(), SAMPLE_RATE)
+        a = torchaudio.transforms.Resample(srs[i].item(), SAMPLE_RATE).forward(fil)
+        # = torch.from_numpy(a).requires_grad_(True)
         arr.append(a)
     return arr
 
@@ -176,7 +181,7 @@ def select_input(idx):
         x = np.concatenate((x, [0]*(TOTAL_SAMPLES_OUT-len(x))))
     
     x = x[:TOTAL_SAMPLES_OUT]
-    return normalize_audio(x)
+    return normalize_data(x)
 
 def get_example(idx):
     x = EXAMPLES[idx]
@@ -184,7 +189,7 @@ def get_example(idx):
         x = np.concatenate((x, [0]*(TOTAL_SAMPLES_OUT-len(x))))
 
     x = x[:TOTAL_SAMPLES_OUT]
-    return normalize_audio(x)
+    return normalize_data(x)
 def get_random_example():
     return get_example(np.random.randint(len(EXAMPLES)))
 
@@ -194,7 +199,7 @@ def get_example_result(idx):
         x = torch.cat((x, torch.zeros(TOTAL_SAMPLES_OUT-len(x))))
 
     x = x[:TOTAL_SAMPLES_OUT]
-    return normalize_audio(x)
+    return normalize_data(x)
 def get_random_example_result():
     return get_example_result(np.random.randint(len(EXAMPLE_RESULTS)))
 
@@ -225,7 +230,7 @@ class OneStep():
     def generate_one_step(self):
         with torch.no_grad():
             self.generator.eval()
-            predicted_logits = self.generator(generate_input_noise())
+            predicted_logits = self.generator(generate_input_noise().cuda())
             self.generator.train()
         return torch.squeeze(predicted_logits)
 
@@ -241,7 +246,7 @@ def generate_input_noise():
     if GEN_MODE in [5]:
         return torch.randn(1, TOTAL_SAMPLES_IN, 1, requires_grad=True).cuda()
     else:
-        return torch.randn(1, TOTAL_SAMPLES_IN, 1, 1, requires_grad=True).cuda()
+        return torch.randn(N_BATCHES//GEN_SAMPLE_RATE_FACTOR, GEN_SAMPLE_RATE_FACTOR*TOTAL_SAMPLES_IN, GEN_KERNEL_SIZE, requires_grad=True).cuda()
 
 gen_loss, dis_loss = None, None
 
@@ -270,84 +275,72 @@ def get_output_from_params(params, window):
 def run_models(window, real):
     #global gen_loss, dis_loss
 
-    def verdict_str(out):
+    def verdict_str(out1, out2):
         if REAL_LABEL > FAKE_LABEL:
-            if REAL_LABEL-out > FAKE_LABEL+out:
-                return "FAKE"
-            elif REAL_LABEL-out < FAKE_LABEL+out:
-                return "REAL"
+            if out1 > out2:
+                return "REAL", "FAKE"
+            elif out1 < out2:
+                return "FAKE", "REAL"
             else:
-                return "UNSURE"
+                return "UNSURE", "UNSURE"
         else:
-            if REAL_LABEL-out < FAKE_LABEL+out:
-                return "FAKE"
-            elif REAL_LABEL-out > FAKE_LABEL+out:
-                return "REAL"
+            if out1 < out2:
+                return "REAL", "FAKE"
+            elif out1 > out2:
+                return "FAKE", "REAL"
             else:
-                return "UNSURE"
-
-    #real_label = torch.as_tensor(REAL_LABEL).to(torch.float).cuda()
-    #fake_label = torch.as_tensor(FAKE_LABEL).to(torch.float).cuda()
+                return "UNSURE", "UNSURE"
 
     dis.zero_grad()
+    gen.zero_grad()
 
-    y = dis(real)
+    y1 = dis(real)
     
-    real_verdict = y.flatten().squeeze().mean()
-    label = torch.full(y.shape, REAL_LABEL).to(torch.float).cpu()
-    dis_loss_real = dis.criterion(label, y)
+    real_verdict = y1.flatten().squeeze().mean()
+    label = torch.full(y1.shape, REAL_LABEL).to(torch.float).cuda()
+    dis_loss_real = dis.criterion(label, y1)
     #dis_loss_real.backward(retain_graph=True)
 
     if GEN_MODE in [5]:
         noise = generate_input_noise()
         params = gen(noise)
         audio = get_output_from_params(params, window)
-        fake = torch.squeeze(audio).float().cuda()
+        fake1 = torch.squeeze(audio).float().cuda()
     else:
         noise = generate_input_noise()
-        fake = gen(noise)
-    fake_for_dis = fake.clone().detach()
-    y = dis(fake_for_dis)
-    fake_verdict = y.flatten().squeeze().mean()
+        fake1 = gen(noise)
+    
+    y2 = dis(fake1)
+    fake_verdict = y2.flatten().squeeze().mean()
     if torch.isnan(fake_verdict):
         raise RuntimeError("Discriminator output NaN!")
-    label = torch.full(y.shape, FAKE_LABEL).to(torch.float).cpu()
-    dis_loss_fake = dis.criterion(label, y)
+    label = torch.full(y2.shape, FAKE_LABEL).to(torch.float).cuda()
+    dis_loss_fake = dis.criterion(label, y2)
     #dis_loss_fake.backward(retain_graph=True)
     dis_loss = dis_loss_real + dis_loss_fake
-    dis_loss.backward(retain_graph=False)
+    dis_loss.backward(retain_graph=True)
     dis_optim.step()
 
-    gen.zero_grad()
-
-    if GEN_MODE in [5]:
-        noise = generate_input_noise()
-        params = gen(noise)
-        audio = get_output_from_params(params, window)
-        fake = torch.squeeze(audio).float().cuda()
-    else:
-        noise = generate_input_noise()
-        fake = gen(noise)
-    fake_for_dis = fake.clone().detach()
-    y = dis(fake_for_dis)
-    fake_verdict = y.flatten().squeeze().mean()
-    label = torch.full(y.shape, REAL_LABEL).to(torch.float).cuda()
-    gen_loss = gen.criterion(label, y)
+    y3 = dis(fake1)
+    fake_verdict = y3.flatten().squeeze().mean()
+    
+    #difference = torch.log_softmax(y1.clone() - y2.clone())
+    label = torch.full(y3.shape, REAL_LABEL).to(torch.float).cuda()
+    gen_loss = gen.criterion(label, y3)
     #gradients = torch.autograd.grad(outputs=fake_verdict, inputs=gen_loss, grad_outputs=real_label, create_graph=False, retain_graph=None, only_inputs=True)[0]
     #gp = ((gradients.norm(dim=1)-1)**2).mean() + fake_verdict
     gen_loss.backward()
     #gp.backward()
     gen_optim.step()
 
+    real_str, fake_str = verdict_str(real_verdict.item(), fake_verdict.item())
     try:
-        window.move(6,0)
-        window.clrtoeol()
-        window.move(7,0)
-        window.clrtoeol()
-        window.addstr(6,0, "| Real Verdict: "+verdict_str(real_verdict.item())+"\t"
+        window.addstr(6,0, "| Real Verdict: "+real_str+"\t"
             + str(round(real_verdict.item(), 4)))
-        window.addstr(7,0, "| Fake Verdict: "+verdict_str(fake_verdict.item())+"\t"
+        window.addstr(7,0, "| Fake Verdict: "+fake_str+"\t"
             + str(round(fake_verdict.item(), 4)))
+        #window.addstr(8,0, "| Verdict Diff: \t"+"\t"
+        #    + str(round(gen_loss.flatten().squeeze().mean().item(), 4)))
         window.refresh()
     except curses.error:
         pass
@@ -356,7 +349,7 @@ def run_models(window, real):
     total_real_verdicts.append(real_verdict.item())
     total_fake_verdicts.append(fake_verdict.item())
 
-    return real, fake, gen_loss, dis_loss
+    return real, fake1, gen_loss.flatten().squeeze().mean(), dis_loss
 
 def save_states():
     torch.save({
@@ -370,17 +363,14 @@ def save_states():
 def train_on_random(window, epoch, dirname):
     global current_output, current_example
     while True:
-        z = torch.autograd.Variable(normalize_audio(torch.as_tensor(create_input())), requires_grad=True).cuda()
+        z = torch.autograd.Variable(normalize_data(torch.as_tensor(create_input())), requires_grad=True).cuda()
         begin_time = time.time()
         real, fake, gen_loss, dis_loss = run_models(window, z)
-        current_output = normalize_audio(fake.clone().detach()).cpu().numpy()
-        current_example = normalize_audio(real.clone().detach()).cpu().numpy()
+        current_output = normalize_data(fake.clone().detach()).cpu().numpy()
+        current_example = normalize_data(real.clone().detach()).cpu().numpy()
         total_gen_losses.append(gen_loss.clone().detach().cpu().numpy())
         total_dis_losses.append(dis_loss.clone().detach().cpu().numpy())
-        window.move(8,0)
-        window.clrtoeol()
-        window.move(9,0)
-        window.clrtoeol()
+
         window.addstr(8,0, "|] Gen Loss:\t\t"+ str(round(float(gen_loss), 4)))
         window.addstr(9,0, "|] Dis Loss:\t\t"+ str(round(float(dis_loss), 4)))
 
@@ -402,6 +392,33 @@ def train_on_random(window, epoch, dirname):
         yield time_diff
 
 clear = lambda: os.system('cls' if os.name=='nt' else 'clear')
+
+def generate_progress_report(window, epoch, dirname, num_times_saved, force=False):
+    global vis_paused
+    #cprint("Generating progress update...")
+    #time.sleep(0.5)
+    if num_times_saved == 0:
+        os.mkdir(dirname)
+    begin_time = time.time()
+    if (save_plots and not vis_paused) or force:
+        next(plot_metrics(epoch, save_to_disk=True))
+    if GEN_MODE in [5]:
+        params = onestep.generate_one_step()
+        out1 = get_output_from_params(params, window)
+    else:
+        out1 = onestep.generate_one_step()
+    
+    write_normalized_audio_to_disk(out1, dirname+'/progress'+str(epoch)+"_"+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav')
+    time_last_saved = time.time()
+    time_diff = time.time() - begin_time
+    print("Progress update generated in", str(round(time_diff, ndigits=2)), "seconds.")
+    try:
+        window.move(11,40)
+        window.clrtoeol()
+        window.refresh()
+    except curses.error:
+        pass
+    yield time_last_saved
 
 def train_until_interrupt(window, starting_epoch, save_plots=False):
     states = None
@@ -426,14 +443,6 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
             window.clrtoeol()
         except curses.error:
             pass
-    
-    window.addstr(0,0, "="*80)
-    window.addstr(1,0, "MODEL TRAINING STARTED AT "+timestamp)
-    window.addstr(2,0, "="*80)
-    window.addstr(3,41, "Visualizer key commands:")
-    window.addstr(4,41, "s = save checkpoint")
-    window.addstr(5,41, "c = clear metrics")
-    window.addstr(4,61, "x = save & exit")
     window.refresh()
     
     if MAX_ITERS == 0:
@@ -442,6 +451,19 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
         if RUN_FOR_SEC > 0 and time_passed > RUN_FOR_SEC:
             break
         try:
+            try:
+                window.addstr(0,0, "="*80)
+                window.addstr(1,0, "MODEL TRAINING STARTED AT "+timestamp)
+                window.addstr(2,0, "="*80)
+                window.addstr(4,41, "Visualizer key commands:")
+                window.addstr(5,41, "s = save checkpoint")
+                window.addstr(6,41, "c = clear metrics")
+                window.addstr(7,41, "x = save & exit")
+                window.addstr(8,41, "r = generate progress report")
+                window.addstr(9,41, "p = pause visualization (models will still run)")
+                window.refresh()
+            except curses.error:
+                pass
             try:
                 pygame.event.pump()
                 for ev in pygame.event.get():
@@ -464,6 +486,26 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                             window.refresh()
                         elif ev.key == K_c:
                             clear_metrics()
+                        elif ev.key == K_r:
+                            try:
+                                window.move(11,40)
+                                window.clrtoeol()
+                                window.addstr(11,40, "Generating progress update...")
+                                window.refresh()
+                            except curses.error:
+                                pass
+                            next(generate_progress_report(window, epoch, dirname, num_times_saved, force=True))
+                            try:
+                                window.move(11,40)
+                                window.clrtoeol()
+                                window.refresh()
+                            except curses.error:
+                                pass
+                            num_times_saved += 1
+                            time_since_last_save = -1
+                        elif ev.key == K_p:
+                            global vis_paused
+                            vis_paused = not vis_paused
                 ta_clk.tick(60)
             except:
                 pass
@@ -492,45 +534,12 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                 except curses.error:
                     pass
             avg_iters_per_sec = epoch / time_passed
-            if save_plots and epoch % VIS_UPDATE_INTERVAL == 0:
+            if save_plots and epoch % VIS_UPDATE_INTERVAL == 0 and not vis_paused:
                 next(plot_metrics(epoch, save_to_disk=False))
             if SAVE_EVERY_SECONDS > 0 and avg_iters_per_sec > 0 and epoch / avg_iters_per_sec % float(SAVE_EVERY_SECONDS) < 1.0 / avg_iters_per_sec:
+                generate_progress_report(window, epoch, dirname, num_times_saved, force=True)
                 time_since_last_save = -1
-                try:
-                    window.move(11,40)
-                    window.clrtoeol()
-                    window.addstr(11,40, "Generating progress update...")
-                    window.refresh()
-                except curses.error:
-                    pass
-                #cprint("Generating progress update...")
-                #time.sleep(0.5)
-                if num_times_saved == 0:
-                    os.mkdir(dirname)
-                begin_time = time.time()
-                if save_plots:
-                    next(plot_metrics(epoch, save_to_disk=True))
-                if GEN_MODE in [5]:
-                    params = onestep.generate_one_step()
-                    out1 = get_output_from_params(params, window)
-                    #amp, phase = my_hilbert(out1)
-                else:
-                    out1 = onestep.generate_one_step()
-                    #amp, phase = my_hilbert(out1)
-                #if len(total_amps) <= num_times_saved:
-                #    total_amps.append(amp)
-                #if len(total_phases) <= num_times_saved:
-                #    total_phases.append(phase)
-                write_normalized_audio_to_disk(out1, dirname+'/progress'+str(epoch)+"_"+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav')
-                time_last_saved = time.time()
-                time_diff = time.time() - begin_time
                 num_times_saved += 1
-                print("Progress update generated in", str(round(time_diff, ndigits=2)), "seconds.")
-                try:
-                    window.move(11,40)
-                    window.clrtoeol()
-                except curses.error:
-                    pass
             time_since_last_save = time.time() - time_last_saved
             if MAX_ITERS != 0:
                 i += 1
@@ -580,11 +589,13 @@ if __name__ == "__main__":
     else:
         print("Created", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
-    print("Creating models...")
+    print("Creating Generator...")
     gen = TAGenerator().cuda()
-    dis = TADiscriminator().cpu()
-    gen_optim = torch.optim.RMSprop(gen.parameters(), lr=GENERATOR_LR, momentum=GENERATOR_MOMENTUM)
-    #gen_optim = torch.optim.Adam(gen.parameters(), lr=GENERATOR_LR, betas=(GENERATOR_BETA, 0.999))
+    print("Creating Discriminator...")
+    dis = TADiscriminator().cuda()
+    print("Creating Optimizers...")
+    #gen_optim = torch.optim.SGD(gen.parameters(), lr=GENERATOR_LR, momentum=GENERATOR_MOMENTUM)
+    gen_optim = torch.optim.Adam(gen.parameters(), lr=GENERATOR_LR, betas=(GENERATOR_BETA, 0.999))
     dis_optim = torch.optim.Adam(dis.parameters(), lr=DISCRIMINATOR_LR, betas=(DISCRIMINATOR_BETA, 0.999))
     #dis_optim = torch.optim.RMSprop(dis.parameters(), lr=DISCRIMINATOR_LR, momentum=DISCRIMINATOR_MOMENTUM)
     #gen = TAInstParamGenerator().cuda()
@@ -631,12 +642,10 @@ if __name__ == "__main__":
     print("Done!")
     if G_csi:
         G_csi.stop()
-    amp, phase = my_hilbert(data)
-    total_amps.append(amp)
-    total_phases.append(phase)
 
     write_normalized_audio_to_disk(data, 'out1.wav')
 
     plot_metrics(i, save_to_disk=True)
 
     pygame.quit()
+

@@ -3,6 +3,7 @@ import torch
 import torch.fft
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.autograd as ag
 import torchaudio
 import torchaudio.transforms
 from helper import *
@@ -19,7 +20,12 @@ class TADiscriminator(nn.Module):
 
         self.n_layers = N_DIS_LAYERS
         self.ksz = DIS_KERNEL_SIZE
-        self.ndf = DIS_N_MELS
+        if DIS_MODE == 0:
+            self.ndf = 1
+        elif DIS_MODE == 1:
+            self.ndf = DIS_N_MELS
+        else:
+            self.ndf = 1
         self.stride = 1
 
         self.net = []
@@ -28,34 +34,43 @@ class TADiscriminator(nn.Module):
         for _ in range(self.n_layers):
             c = 2**i
             n = 2**(i+1)
-            
-            self.net.append(nn.Conv2d(self.ndf*c, self.ndf*n, self.ksz, self.stride, 0, bias=False))
-            self.net.append(nn.BatchNorm2d(self.ndf*n))
-            self.net.append(nn.LeakyReLU(0.2, inplace=True))
-            
+            if DIS_MODE in [0, 2]:
+                self.net.append(nn.Conv1d(self.ndf*c, self.ndf*n, self.ksz, self.stride, 0, bias=False).cuda())
+                self.net.append(nn.BatchNorm1d(self.ndf*n).cuda())
+            else:
+                self.net.append(nn.Conv2d(self.ndf*c, self.ndf*n, self.ksz, self.stride, 0, bias=False).cuda())
+                self.net.append(nn.BatchNorm2d(self.ndf*n).cuda())
+            self.net.append(nn.LeakyReLU(0.2, inplace=True).cuda())
             i += 1
         n = 2**(i+1)
-        self.net.append(nn.Flatten())
+        #self.net.append(nn.Flatten().cuda())
         #self.net.append(nn.Linear(8*self.ndf*n, 1))
-        self.net.append(nn.Sigmoid())
+        #self.net.append(nn.Softsign().cuda())
+        self.net.append(nn.Sigmoid().cuda())
+        self.net.append(nn.Flatten().cuda())
+        
 
         self.net = nn.Sequential(*self.net)
     
     def criterion(self, label, output):
-        l = self.loss(output, label.cpu())
-        #l = F.relu(l)
-        return l
+        return self.loss(output.cuda(), label.cuda())
 
     def forward(self, inp):
         if DIS_MODE == 0:
-            amp, phase = HilbertWithGradients.apply(inp)
-            inp = torch.stack((amp, phase))
-            inp = torch.unsqueeze(inp, 0)
-            inp = torch.unsqueeze(inp, 3)
-            out = self.net[0](inp.to(torch.float))
+            fft1 = ag.Variable(torch.unsqueeze(
+                torch.fft.fft(inp.to(torch.float)).cuda(), -1).cuda(), requires_grad=True).cuda()
+            mag = ag.Variable(torch.square(torch.real(fft1)) + torch.square(torch.imag(fft1)), requires_grad=True).cuda()
+            pha = ag.Variable(torch.atan2(torch.real(fft1), torch.imag(fft1)), requires_grad=True).cuda()
+            actual_input = ag.Variable(torch.stack((mag, pha)).permute(0,2,1), requires_grad=True).cuda()
         elif DIS_MODE == 1:
             # what an ugly line of code
-            mel1 = torchaudio.transforms.MelSpectrogram(SAMPLE_RATE, DIS_N_FFT, n_mels=DIS_N_MELS, normalized=True)(inp[:-DIS_N_MELS].to(torch.float).cpu()).cpu()
+            actual_input = ag.Variable(torch.unsqueeze(torch.unsqueeze(torchaudio.transforms.MelSpectrogram(
+                SAMPLE_RATE, DIS_N_FFT, n_mels=DIS_N_MELS)(
+                        inp[:-DIS_N_MELS].to(torch.float).cpu()
+                    ).cuda(),0),3).cuda(), requires_grad=True).cuda()
             #mel1.retain_grad()
+        elif DIS_MODE == 2:
+            actual_input = ag.Variable(torch.unsqueeze(inp.clone().to(torch.float), 0).reshape(1,1,TOTAL_SAMPLES_OUT), requires_grad=True).cuda()
 
-        return self.net.forward(torch.unsqueeze(torch.unsqueeze(mel1,0),3))
+        verdicts = self.net.forward(actual_input)
+        return normalize_data(verdicts).clamp(0.001+FAKE_LABEL, 0.999*REAL_LABEL+FAKE_LABEL)
