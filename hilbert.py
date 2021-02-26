@@ -2,6 +2,7 @@ import six
 import numpy as np
 import scipy.signal
 import torch
+import torch.nn.functional as F
 from torch.nn.modules.module import Module
 from torch.nn.parameter import Parameter
 from torch.autograd import Function
@@ -33,6 +34,35 @@ def hilbert_from_scratch(u):
     # take inverse Fourier transform
     v = np.fft.ifft(U)
     return v
+
+def hilbert_from_scratch_pytorch(u, n=TOTAL_SAMPLES_OUT):
+    # N : fft length
+    # M : number of elements to zero out
+    # U : DFT of u
+    # v : IDFT of H(U)
+
+    N = len(u.flatten())
+    # take forward Fourier transform
+    U = torch.fft.fft(u.flatten(), n=n)
+    M = N - N//2 - 1
+    # zero out negative frequency components
+    U[N//2+1:] = torch.zeros(M)
+    # double fft energy except @ DC0
+    U[1:N//2] = 2 * U[1:N//2]
+    # take inverse Fourier transform
+    v = torch.fft.ifft(U, n=n)
+    amp_env = torch.abs(v)
+    phi = torch.angle(v)
+
+    # credit to Past-Future-AI @ Pytorch forums for this one
+    dphi = F.pad(phi[..., 1:]-phi[..., :-1], (1,0))
+    dphi_m = ((dphi+np.pi) % (2*np.pi)) - np.pi
+    dphi_m[(dphi_m==-np.pi)&(dphi>0)] = np.pi
+    phi_adj = dphi_m-dphi
+    phi_adj[dphi.abs()<np.pi] = 0
+    inst_phas = phi + phi_adj.cumsum(-1)
+
+    return amp_env.cuda(), inst_phas.cuda()
 
 def my_hilbert(inp):
     analytic_signal = scipy.signal.hilbert(inp.detach().cpu().numpy())

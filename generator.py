@@ -25,7 +25,7 @@ class TAInstParamGenerator(nn.Module):
         
         self.loss = nn.BCELoss()
 
-        self.n_layers = N_GEN_LAYERS
+        self.n_layers = MIN_N_GEN_LAYERS
         self.ksz = GEN_KERNEL_SIZE
         self.ndf = N_PARAMS * 2 * TOTAL_PARAM_UPDATES # ensure we never run out of params
 
@@ -96,10 +96,12 @@ class TAGenerator(nn.Module):
         self.padding_mode = 'reflect'
         self.dilation = 1
         self.output_padding = 0
+
         self.stride1 = 4
         self.stride2 = 1
-        self.scale1 = 4
+        self.scale1 = 2
         self.scale2 = 1.1
+        
         self.n_rnn = 2
 
         v_cprint("*-"*39 + "*")
@@ -116,7 +118,7 @@ class TAGenerator(nn.Module):
         self.max_Lout = self.stride2*self.total_samp_out//(self.n_batches*self.stride1)
         Lin = TOTAL_SAMPLES_IN*GEN_SAMPLE_RATE_FACTOR
         Lout = Lin
-        while Lout < self.max_Lout or self.n_processing_indices < N_GEN_LAYERS:
+        while Lout < self.max_Lout or self.n_processing_indices < MIN_N_GEN_LAYERS:
             #Lin = int(Lin * self.scale)
             Lout = int(self.scale1 * Lin)
             Lout = int(min(Lout, self.max_Lout))
@@ -142,8 +144,6 @@ class TAGenerator(nn.Module):
             self.process_layers.append(nn.BatchNorm1d(Lin).cuda())
             v_cprint("Creating Activation layer.")
             self.process_layers.append(nn.ReLU().cuda())
-            
-            
 
             self.n_processing_indices += 1
         
@@ -154,7 +154,7 @@ class TAGenerator(nn.Module):
         self.final_layers = [
             nn.Flatten().cuda(),
             torchaudio.transforms.Resample(self.sr, SAMPLE_RATE),            
-            nn.Tanh().cuda(),
+            #nn.Tanh().cuda(),
             nn.Flatten().cuda(),
         ]
         

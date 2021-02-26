@@ -31,6 +31,7 @@ from hilbert import *
 
 #os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 #torch.autograd.set_detect_anomaly(True)
+torchaudio.set_audio_backend('soundfile')
 plt.switch_backend('agg')
 
 np.random.seed(int(round(time.time())))
@@ -42,6 +43,7 @@ total_gen_losses = []
 total_dis_losses = []
 total_real_verdicts = []
 total_fake_verdicts = []
+current_view_mode = 1
 current_output = np.zeros(TOTAL_SAMPLES_OUT)
 current_example = np.zeros(TOTAL_SAMPLES_OUT)
 vis_paused = False
@@ -58,6 +60,7 @@ def record_amp_phase(amp, phase):
     # total_phases.append(phase)
     pass
 
+@torch.no_grad()
 def plot_metrics(i, save_to_disk=False):
     global total_gen_losses, total_dis_losses
     timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
@@ -86,9 +89,9 @@ def plot_metrics(i, save_to_disk=False):
     #     fig2.savefig(os.path.join(dirname, filename2))
 
     if type(total_gen_losses) is torch.Tensor:
-        total_gen_losses = total_gen_losses.detach().cpu().numpy()
+        total_gen_losses = total_gen_losses.clone().detach().cpu().numpy()
     if type(total_dis_losses) is torch.Tensor:
-        total_dis_losses = total_dis_losses.detach().cpu().numpy()
+        total_dis_losses = total_dis_losses.clone().detach().cpu().numpy()
     if len(total_gen_losses) + len(total_dis_losses) + len(total_real_verdicts) + len(total_fake_verdicts) > 0:
         fig3, (ax1, ax2, ax3) = plt.subplots(3,1, figsize=[VIS_WIDTH//100,VIS_HEIGHT//50], dpi=50)
         fig3.subplots_adjust(hspace=0.5)
@@ -112,11 +115,14 @@ def plot_metrics(i, save_to_disk=False):
         plt.close()
 
         out_spec_fig = plt.figure(figsize=[VIS_WIDTH//100, VIS_HEIGHT//100], dpi=50)
-        plt.title('Output Spectrogram')
+        if current_view_mode == 1:
+            plt.title('Output Spectrogram')
+        elif current_view_mode == 2:
+            plt.title('Progress Spectrogram')
         #spec_out = librosa.feature.melspectrogram(current_output, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
         #librosa.display.specshow(librosa.power_to_db(spec_out, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
-        plt.specgram(current_output, VIS_N_FFT, mode='magnitude', cmap='magma')
-        plt.colorbar(format='%+2.0f')
+        plt.specgram(current_output, VIS_N_FFT, mode='psd', cmap='magma')
+        plt.colorbar(format='%+2.0f dB')
         plt.tight_layout()
         canvas = agg.FigureCanvasAgg(out_spec_fig)
         canvas.draw()
@@ -129,8 +135,8 @@ def plot_metrics(i, save_to_disk=False):
         plt.title('Example Spectrogram')
         #spec_example = librosa.feature.melspectrogram(current_example, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
         #librosa.display.specshow(librosa.power_to_db(spec_example, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
-        plt.specgram(current_example, VIS_N_FFT, mode='magnitude', cmap='magma')
-        plt.colorbar(format='%+2.0f')
+        plt.specgram(current_example, VIS_N_FFT, mode='psd', cmap='magma')
+        plt.colorbar(format='%+2.0f dB')
         plt.tight_layout()
         canvas = agg.FigureCanvasAgg(example_spec_fig)
         canvas.draw()
@@ -227,12 +233,14 @@ class OneStep():
         super().__init__()
         self.generator = generator
 
-    def generate_one_step(self):
+    def generate_one_step(self, noise=None):
         with torch.no_grad():
+            if noise is None:
+                noise = generate_input_noise().cuda()
             self.generator.eval()
-            predicted_logits = self.generator(generate_input_noise().cuda())
+            predicted_logits = self.generator(noise)
             self.generator.train()
-        return torch.squeeze(predicted_logits)
+            return torch.squeeze(predicted_logits)
 
 def create_input():
         #x = get_random_example()
@@ -247,7 +255,8 @@ def generate_input_noise():
         return torch.randn(1, TOTAL_SAMPLES_IN, 1, requires_grad=True).cuda()
     else:
         return torch.randn(N_BATCHES//GEN_SAMPLE_RATE_FACTOR, GEN_SAMPLE_RATE_FACTOR*TOTAL_SAMPLES_IN, GEN_KERNEL_SIZE, requires_grad=True).cuda()
-
+    
+training_noise = generate_input_noise()
 gen_loss, dis_loss = None, None
 
 def weights_init(m):
@@ -292,14 +301,12 @@ def run_models(window, real):
                 return "UNSURE", "UNSURE"
 
     dis.zero_grad()
-    gen.zero_grad()
 
-    y1 = dis(real)
-    
-    real_verdict = y1.flatten().squeeze().mean()
+    y1 = dis(real).view(-1)
     label = torch.full(y1.shape, REAL_LABEL).to(torch.float).cuda()
     dis_loss_real = dis.criterion(label, y1)
-    #dis_loss_real.backward(retain_graph=True)
+    dis_loss_real.backward()
+    real_verdict = y1.flatten().squeeze().mean().item()
 
     if GEN_MODE in [5]:
         noise = generate_input_noise()
@@ -310,35 +317,33 @@ def run_models(window, real):
         noise = generate_input_noise()
         fake1 = gen(noise)
     
-    y2 = dis(fake1)
+    y2 = dis(fake1.detach()).view(-1)
     fake_verdict = y2.flatten().squeeze().mean()
     if torch.isnan(fake_verdict):
         raise RuntimeError("Discriminator output NaN!")
-    label = torch.full(y2.shape, FAKE_LABEL).to(torch.float).cuda()
+    label = label.fill_(FAKE_LABEL)
     dis_loss_fake = dis.criterion(label, y2)
-    #dis_loss_fake.backward(retain_graph=True)
+    dis_loss_fake.backward()
     dis_loss = dis_loss_real + dis_loss_fake
-    dis_loss.backward(retain_graph=True)
+    #dis_loss.backward(retain_graph=True)
     dis_optim.step()
 
-    y3 = dis(fake1)
-    fake_verdict = y3.flatten().squeeze().mean()
+    gen.zero_grad()
+    y3 = dis(fake1).view(-1)
     
-    #difference = torch.log_softmax(y1.clone() - y2.clone())
-    label = torch.full(y3.shape, REAL_LABEL).to(torch.float).cuda()
+    label = label.fill_(REAL_LABEL)
+    #label = torch.full(y3.shape, REAL_LABEL).to(torch.float).cuda()
     gen_loss = gen.criterion(label, y3)
-    #gradients = torch.autograd.grad(outputs=fake_verdict, inputs=gen_loss, grad_outputs=real_label, create_graph=False, retain_graph=None, only_inputs=True)[0]
-    #gp = ((gradients.norm(dim=1)-1)**2).mean() + fake_verdict
     gen_loss.backward()
-    #gp.backward()
+    fake_verdict = y3.flatten().squeeze().mean().item()
     gen_optim.step()
 
-    real_str, fake_str = verdict_str(real_verdict.item(), fake_verdict.item())
+    real_str, fake_str = verdict_str(real_verdict, fake_verdict)
     try:
         window.addstr(6,0, "| Real Verdict: "+real_str+"\t"
-            + str(round(real_verdict.item(), 4)))
+            + str(round(real_verdict, 4)))
         window.addstr(7,0, "| Fake Verdict: "+fake_str+"\t"
-            + str(round(fake_verdict.item(), 4)))
+            + str(round(fake_verdict, 4)))
         #window.addstr(8,0, "| Verdict Diff: \t"+"\t"
         #    + str(round(gen_loss.flatten().squeeze().mean().item(), 4)))
         window.refresh()
@@ -346,8 +351,8 @@ def run_models(window, real):
         pass
 
 
-    total_real_verdicts.append(real_verdict.item())
-    total_fake_verdicts.append(fake_verdict.item())
+    total_real_verdicts.append(real_verdict)
+    total_fake_verdicts.append(fake_verdict)
 
     return real, fake1, gen_loss.flatten().squeeze().mean(), dis_loss
 
@@ -366,10 +371,15 @@ def train_on_random(window, epoch, dirname):
         z = torch.autograd.Variable(normalize_data(torch.as_tensor(create_input())), requires_grad=True).cuda()
         begin_time = time.time()
         real, fake, gen_loss, dis_loss = run_models(window, z)
-        current_output = normalize_data(fake.clone().detach()).cpu().numpy()
-        current_example = normalize_data(real.clone().detach()).cpu().numpy()
-        total_gen_losses.append(gen_loss.clone().detach().cpu().numpy())
-        total_dis_losses.append(dis_loss.clone().detach().cpu().numpy())
+        with torch.no_grad():
+            if not vis_paused:
+                if current_view_mode == 1:
+                    current_output = normalize_data(fake.detach().clone()).cpu().numpy()
+                elif current_view_mode == 2:
+                    current_output = normalize_data(onestep.generate_one_step(training_noise)).cpu().numpy()
+                current_example = normalize_data(real.detach().clone()).cpu().numpy()
+            total_gen_losses.append(gen_loss.item())
+            total_dis_losses.append(dis_loss.item())
 
         window.addstr(8,0, "|] Gen Loss:\t\t"+ str(round(float(gen_loss), 4)))
         window.addstr(9,0, "|] Dis Loss:\t\t"+ str(round(float(dis_loss), 4)))
@@ -403,10 +413,10 @@ def generate_progress_report(window, epoch, dirname, num_times_saved, force=Fals
     if (save_plots and not vis_paused) or force:
         next(plot_metrics(epoch, save_to_disk=True))
     if GEN_MODE in [5]:
-        params = onestep.generate_one_step()
+        params = onestep.generate_one_step(training_noise)
         out1 = get_output_from_params(params, window)
     else:
-        out1 = onestep.generate_one_step()
+        out1 = onestep.generate_one_step(training_noise)
     
     write_normalized_audio_to_disk(out1, dirname+'/progress'+str(epoch)+"_"+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav')
     time_last_saved = time.time()
@@ -461,6 +471,7 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                 window.addstr(7,41, "x = save & exit")
                 window.addstr(8,41, "r = generate progress report")
                 window.addstr(9,41, "p = pause visualization (models will still run)")
+                window.addstr(10,41, "m = change view mode (output/progress)")
                 window.refresh()
             except curses.error:
                 pass
@@ -506,6 +517,12 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                         elif ev.key == K_p:
                             global vis_paused
                             vis_paused = not vis_paused
+                        elif ev.key == K_m:
+                            global current_view_mode
+                            if current_view_mode == 1:
+                                current_view_mode = 2
+                            elif current_view_mode == 2:
+                                current_view_mode = 1
                 ta_clk.tick(60)
             except:
                 pass

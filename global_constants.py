@@ -44,7 +44,7 @@ SUBTYPE = 'PCM_16'
 INPUT_DURATION = 2**8 / SAMPLE_RATE
 OUTPUT_DURATION = 2**16 / SAMPLE_RATE # power of 2 samples
 GEN_KERNEL_SIZE = 2
-N_GEN_LAYERS = 1
+MIN_N_GEN_LAYERS = 1
 # RNN mode only
 N_RNN_LAYERS = 4
 # CSound mode only
@@ -57,8 +57,8 @@ N_PROCESS_LAYERS = 4
 BATCH_SIZE = 2**14 # also a power of 2, lower = more efficient but lower quality
 
 # Hyperparameters
-GENERATOR_LR = 0.0001
-GENERATOR_BETA = 0.5
+GENERATOR_LR = 0.001
+GENERATOR_BETA = 0.4
 #GENERATOR_MOMENTUM = 0.02
 
 # If you change ANY of the following values, you MUST empty
@@ -66,12 +66,14 @@ GENERATOR_BETA = 0.5
 # an error!
 INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
                         # 'conv' = comparison of example and convolved example result
-DIS_MODE = 0            # 0 = FFT mode
-                        # 1 = Mel spectrogram mode
-                        # 2 = Direct mode
+DIS_MODE = 3            # 0 = Direct mode
+                        # 1 = FFT mode
+                        # 2 = Mel mode
+                        # 3 = Hilbert mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
 N_DIS_LAYERS = 3
+DIS_STRIDE = 8
 DIS_KERNEL_SIZE = 256
 DIS_N_FFT = 2**11
 #DIS_HOP_LEN = 64
