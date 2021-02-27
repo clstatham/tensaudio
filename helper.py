@@ -1,9 +1,10 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.autograd import Function
-from sklearn.preprocessing import normalize
 
 import librosa
+import librosa.util
 import soundfile
 
 from global_constants import *
@@ -385,10 +386,12 @@ def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, g
     else:
       return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s))
   #return tf.reshape(t, (N_BATCHES, 2, 1))
+def normalize_audio(audio):
+  return F.normalize(audio.flatten(), dim=0)
 def normalize_data(tensor):
   return tensor/tensor.abs().max()
 def write_normalized_audio_to_disk(sig, fn):
-  sig_numpy = normalize_data(sig.clone().detach().cpu()).numpy()
+  sig_numpy = librosa.util.normalize(sig.clone().detach().cpu().numpy())
   scaled = np.int16(sig_numpy * 32767)
   soundfile.write(fn, scaled, SAMPLE_RATE, SUBTYPE)
 

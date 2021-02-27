@@ -192,7 +192,7 @@ def select_input(idx):
         x = np.concatenate((x, [0]*(TOTAL_SAMPLES_OUT-len(x))))
     
     x = x[:TOTAL_SAMPLES_OUT]
-    return normalize_data(x)
+    return normalize_audio(x)
 
 def get_example(idx):
     x = EXAMPLES[idx]
@@ -200,7 +200,7 @@ def get_example(idx):
         x = np.concatenate((x, [0]*(TOTAL_SAMPLES_OUT-len(x))))
 
     x = x[:TOTAL_SAMPLES_OUT]
-    return normalize_data(x)
+    return normalize_audio(x)
 def get_random_example():
     return get_example(np.random.randint(len(EXAMPLES)))
 
@@ -210,7 +210,7 @@ def get_example_result(idx):
         x = torch.cat((x, torch.zeros(TOTAL_SAMPLES_OUT-len(x))))
 
     x = x[:TOTAL_SAMPLES_OUT]
-    return normalize_data(x)
+    return normalize_audio(x)
 def get_random_example_result():
     return get_example_result(np.random.randint(len(EXAMPLE_RESULTS)))
 
@@ -373,16 +373,16 @@ def save_states():
 def train_on_random(window, epoch, dirname):
     global current_output, current_example
     while True:
-        z = torch.autograd.Variable(normalize_data(torch.as_tensor(create_input())), requires_grad=True).cuda()
+        z = torch.autograd.Variable(normalize_audio(torch.as_tensor(create_input())), requires_grad=True).cuda()
         begin_time = time.time()
         real, fake, gen_loss, dis_loss = run_models(window, z)
         with torch.no_grad():
             if not vis_paused:
                 if current_view_mode == 1:
-                    current_output = normalize_data(fake.detach().clone()).cpu().numpy()
+                    current_output = normalize_audio(fake.detach().clone()).cpu().numpy()
                 elif current_view_mode == 2:
-                    current_output = normalize_data(onestep.generate_one_step(training_noise)).cpu().numpy()
-                current_example = normalize_data(real.detach().clone()).cpu().numpy()
+                    current_output = normalize_audio(onestep.generate_one_step(training_noise)).cpu().numpy()
+                current_example = normalize_audio(real.detach().clone()).cpu().numpy()
             total_gen_losses.append(gen_loss.item())
             total_dis_losses.append(dis_loss.item())
 

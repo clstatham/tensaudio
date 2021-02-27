@@ -157,8 +157,7 @@ class TAGenerator(nn.Module):
                 quot = samps_post_conv / (self.total_samp_out)
                 s_t = old_s_t
                 k_t = 1
-                #s_c = int(quot)
-                s_c = MIN_N_GEN_LAYERS
+                s_c = 8
             
 
             

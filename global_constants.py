@@ -1,6 +1,6 @@
 RESOURCES_DIR = "D:\\tensaudio_resources"
 EXAMPLES_DIR = "fire"
-EXAMPLE_RESULTS_DIR = "kicks"
+EXAMPLE_RESULTS_DIR = "synthloops"
 INPUTS_DIR = "inputs_kicks"
 
 PLOTS_DIR = "D:\\tensaudio_plots"
