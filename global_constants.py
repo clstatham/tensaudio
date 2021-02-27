@@ -1,6 +1,6 @@
 RESOURCES_DIR = "D:\\tensaudio_resources"
 EXAMPLES_DIR = "fire"
-EXAMPLE_RESULTS_DIR = "synthloops"
+EXAMPLE_RESULTS_DIR = "kicks"
 INPUTS_DIR = "inputs_kicks"
 
 PLOTS_DIR = "D:\\tensaudio_plots"
@@ -13,7 +13,7 @@ VIS_WIDTH = 1200
 VIS_HEIGHT = 700
 VIS_UPDATE_INTERVAL = 1 # iterations
 
-VIS_N_FFT = 2**12
+VIS_N_FFT = 2**10
 
 # set to 0 to run until visualizer is closed
 MAX_ITERS = 0
@@ -38,17 +38,17 @@ GEN_MODE = 3            # 0 = RNN/Hilbert mode
                         # 3 = Conv/Audio mode
                         # 5 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 44100
 GEN_SAMPLE_RATE_FACTOR = 1
 SUBTYPE = 'PCM_16'
 INPUT_DURATION = 2**2 / SAMPLE_RATE
 OUTPUT_DURATION = 2**15 / SAMPLE_RATE # power of 2 samples
-GEN_KERNEL_SIZE = 2**14    # higher = more memory
-GEN_STRIDE1 = 2**14         # higher = more memory
-GEN_STRIDE2 = 1         # higher = more memory
-GEN_SCALE1 = 2**14          # higher = more memory, must be 2 or greater
-GEN_SCALE2 = 1.1        # higher = more memory, must be 1 or greater, can have decimals
-MIN_N_GEN_LAYERS = 1
+GEN_KERNEL_SIZE = 2**8    # higher = more memory
+GEN_STRIDE1 = 8         # higher = more memory
+#GEN_STRIDE2 = 1         # higher = more memory
+#GEN_SCALE1 = 3          # higher = more memory, must be 2 or greater
+GEN_SCALE = 2        # higher = more memory, must be 2 or greater
+MIN_N_GEN_LAYERS = 8
 # RNN mode only
 N_RNN_LAYERS = 4
 # CSound mode only
@@ -57,7 +57,7 @@ KONTROL_SAMPLES = 64
 PARAM_UPDATE_SAMPLES = SAMPLE_RATE*OUTPUT_DURATION
 TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
 # Non-CSound mode only
-BATCH_SIZE = SAMPLE_RATE * OUTPUT_DURATION // 2 # also a power of 2, lower = more efficient but lower quality
+BATCH_SIZE = GEN_KERNEL_SIZE # also a power of 2, lower = more efficient but lower quality
 
 # Hyperparameters
 GENERATOR_LR = 0.0001
@@ -77,8 +77,8 @@ REAL_LABEL = 1.
 FAKE_LABEL = 0.
 N_DIS_LAYERS = 3
 DIS_STRIDE = 16
-DIS_KERNEL_SIZE = 2**5
-DIS_N_FFT = 2**11
+DIS_KERNEL_SIZE = 2**2
+DIS_N_FFT = 2**8
 #DIS_HOP_LEN = 64
 DIS_N_MELS = 128
 DIS_FFT_VAL = 128

@@ -259,7 +259,7 @@ def generate_input_noise():
     if GEN_MODE in [5]:
         return torch.randn(1, TOTAL_SAMPLES_IN, 1, requires_grad=True).cuda()
     else:
-        return torch.randn(N_BATCHES//GEN_SAMPLE_RATE_FACTOR, GEN_SAMPLE_RATE_FACTOR*TOTAL_SAMPLES_IN, GEN_KERNEL_SIZE, requires_grad=True).cuda()
+        return torch.randn(BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
     
 training_noise = generate_input_noise()
 gen_loss, dis_loss = None, None

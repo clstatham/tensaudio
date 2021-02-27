@@ -87,20 +87,15 @@ class TAGenerator(nn.Module):
     def create_conv_net(self, hilb_mode=False):
         self.process_layers = []
 
-        self.sr = SAMPLE_RATE * GEN_SAMPLE_RATE_FACTOR
-        self.total_samp_out = TOTAL_SAMPLES_OUT * GEN_SAMPLE_RATE_FACTOR
-        self.n_batches = N_BATCHES//GEN_SAMPLE_RATE_FACTOR
+        self.sr = SAMPLE_RATE
+        self.total_samp_out = TOTAL_SAMPLES_OUT
+        self.n_batches = N_BATCHES
 
-        self.kernel_size = GEN_KERNEL_SIZE
-        self.padding = 0
         self.padding_mode = 'reflect'
-        self.dilation = 1
-        self.output_padding = 0
 
         self.stride1 = GEN_STRIDE1
-        self.stride2 = GEN_STRIDE2
-        self.scale1 = GEN_SCALE1
-        self.scale2 = GEN_SCALE2
+        self.scale = GEN_SCALE
+        self.channels = N_CHANNELS
         
         self.n_rnn = 2
 
@@ -113,41 +108,58 @@ class TAGenerator(nn.Module):
             #nn.Linear(TOTAL_SAMPLES_IN, self.kernel_size*self.shuffle_fac*TOTAL_SAMPLES_IN*N_BATCHES).cuda()
             nn.ReLU(True).cuda(),
         ]
-
-        stride_quotient = self.stride2 / self.stride1
+        
         self.n_processing_indices = 1
-        self.max_Lout = stride_quotient*self.total_samp_out//N_BATCHES
-        Lin = TOTAL_SAMPLES_IN*GEN_SAMPLE_RATE_FACTOR//2
-        Lout = Lin
-        while Lout < self.max_Lout or self.n_processing_indices < MIN_N_GEN_LAYERS+1:
+        #self.max_Lout = stride_quotient*self.total_samp_out//N_BATCHES
+        #self.max_s_c = TOTAL_SAMPLES_OUT
+        #Lin = TOTAL_SAMPLES_IN*GEN_SAMPLE_RATE_FACTOR//2
+        s_t = self.stride1
+        s_c = 2
+        k_t = GEN_KERNEL_SIZE
+        samps_pre_transpose = BATCH_SIZE*N_CHANNELS*TOTAL_SAMPLES_IN
+        samps_post_transpose = samps_pre_transpose * s_t
+        samps_post_conv = samps_post_transpose // s_c
+        while samps_post_conv < self.total_samp_out or self.n_processing_indices < MIN_N_GEN_LAYERS+1:
             #Lin = int(Lin * self.scale)
-            Lout = int(self.scale1 * Lin)
-            Lout = int(min(Lout, self.max_Lout))
-            Lout_scaled2 = int(Lout * self.scale2)
-            Lout_scaled2_strided1 = Lout_scaled2 * self.stride1
-            Lout_scaled2_strided2 = Lout_scaled2 * self.stride2
+            
             #sqrt_ksz = int(np.sqrt(self.kernel_size))
 
             #n_batches = int(Lout // (N_CHANNELS * self.kernel_size * BATCH_OPTIMIZATION_FACTOR))
             v_cprint("="*80)
-            v_cprint("Creating ConvTranspose1d layer.", Lin, ">", Lout_scaled2)
-            self.process_layers.append(nn.ConvTranspose1d(Lin, Lout_scaled2, groups=1, kernel_size=self.kernel_size, stride=self.stride1, padding=self.padding, dilation=self.dilation).cuda())
+            v_cprint("Creating ConvTranspose1d layer.", samps_pre_transpose, ">", samps_post_transpose)
+            self.process_layers.append(nn.ConvTranspose1d(
+                self.channels, self.channels, groups=1, 
+                kernel_size=k_t, stride=s_t, padding=0, dilation=1
+            ).cuda())
             
             v_cprint("Creating Normalization layer.")
-            self.process_layers.append(nn.BatchNorm1d(Lout_scaled2).cuda())
+            self.process_layers.append(nn.BatchNorm1d(self.channels).cuda())
             v_cprint("Creating Activation layer.")
             self.process_layers.append(nn.ReLU(True).cuda())
             #Lin = int(BATCH_SIZE*(2**GEN_SAMPLE_RATE_FACTOR)*(SAMPLE_RATE/44100))
-            v_cprint("Creating Conv1d layer.", Lout_scaled2, ">", Lout)
-            self.process_layers.append(nn.Conv1d(Lout_scaled2, Lout, groups=1, kernel_size=1, stride=self.stride2, padding=0, dilation=1).cuda())
+            v_cprint("Creating Conv1d layer.", samps_post_transpose, ">", samps_post_conv)
+            self.process_layers.append(nn.Conv1d(
+                self.channels, self.channels, groups=1,
+                kernel_size=1, stride=s_c, padding=0, dilation=1
+            ).cuda())
             self.n_processing_indices += 1
-            if Lout < self.max_Lout or self.n_processing_indices < MIN_N_GEN_LAYERS:
-                # only do this if we're not on the last one
-                v_cprint("Creating Normalization layer.")
-                self.process_layers.append(nn.BatchNorm1d(Lout).cuda())
-                v_cprint("Creating Activation layer.")
-                self.process_layers.append(nn.ReLU(True).cuda())
-            Lin  = Lout
+            #if samps_post_conv > self.total_samp_out or self.n_processing_indices < MIN_N_GEN_LAYERS:
+            v_cprint("Creating Normalization layer.")
+            self.process_layers.append(nn.BatchNorm1d(self.channels).cuda())
+            v_cprint("Creating Activation layer.")
+            self.process_layers.append(nn.ReLU(True).cuda())
+            old_s_t = s_t
+            s_t *= self.scale
+            samps_pre_transpose = samps_post_conv
+            samps_post_transpose = samps_pre_transpose * s_t
+            samps_post_conv = samps_post_transpose // s_c
+            if samps_post_conv >= self.total_samp_out:
+                quot = samps_post_conv / (self.total_samp_out)
+                s_t = old_s_t
+                k_t = 1
+                #s_c = int(quot)
+                s_c = MIN_N_GEN_LAYERS
+            
 
             
         
@@ -158,7 +170,7 @@ class TAGenerator(nn.Module):
         self.final_layers = [
             nn.Flatten().cuda(),
             nn.Tanh().cuda(),
-            torchaudio.transforms.Resample(self.sr, SAMPLE_RATE),
+            #torchaudio.transforms.Resample(self.sr, SAMPLE_RATE),
             #nn.Flatten().cuda(),
         ]
         
@@ -174,7 +186,7 @@ class TAGenerator(nn.Module):
         vv_cprint("|}} Initial data.shape:", pre_init.shape)
         post_init = self.initial_layers.forward(pre_init.float())
 
-        batched = ag.Variable(post_init.clone().reshape((self.n_batches, GEN_SAMPLE_RATE_FACTOR*TOTAL_SAMPLES_IN//2, self.kernel_size*2)))
+        batched = ag.Variable(post_init.clone().reshape((BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN)))
         vv_cprint("|}} Initial layers done.")
         vv_cprint("|}} data.shape:", batched.shape)
         post_process = ag.Variable(self.process_layers.forward(batched).flatten()[:self.total_samp_out])
