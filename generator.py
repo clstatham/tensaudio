@@ -29,7 +29,7 @@ class TAInstParamGenerator(nn.Module):
         self.ksz = GEN_KERNEL_SIZE
         self.ndf = N_PARAMS * 2 * TOTAL_PARAM_UPDATES # ensure we never run out of params
 
-        self.layers = [nn.ConvTranspose1d(TOTAL_SAMPLES_IN, self.ndf, self.ksz)]
+        self.layers = [ct(TOTAL_SAMPLES_IN, self.ndf, self.ksz)]
         i = 0
         for _ in range(self.n_layers):
             c = 2**i
@@ -58,10 +58,6 @@ class TAInstParamGenerator(nn.Module):
 class TAGenerator(nn.Module):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.rnn_state = (
-            ag.Variable(torch.randn((2*N_CHANNELS, N_BATCHES, SAMPLES_PER_BATCH)).cuda()),
-            ag.Variable(torch.randn((2*N_CHANNELS, N_BATCHES, SAMPLES_PER_BATCH)).cuda()),
-        )
 
         self.loss = nn.BCELoss()
 
@@ -72,9 +68,11 @@ class TAGenerator(nn.Module):
             #TODO: port RNN/Audio code to pytorch
             raise NotImplementedError("TODO: implement RNN/Audio mode")
         elif GEN_MODE == 2:
-            self.create_conv_net(hilb_mode=True)
+            self.create_conv_net(mode='hilbert')
         elif GEN_MODE == 3:
-            self.create_conv_net(hilb_mode=False)
+            self.create_conv_net(mode='audio')
+        elif GEN_MODE == 4:
+            self.create_conv_net(mode='mel')
         else:
             # self.total_samp_out = TOTAL_PARAM_UPDATES * N_PARAMS
             # self.desired_process_units = TOTAL_SAMPLES_IN
@@ -82,22 +80,31 @@ class TAGenerator(nn.Module):
             raise ValueError("Created wrong generator class!")
 
     def criterion(self, label, output):
-        return self.loss(output.cuda(), label.cuda())
+        return self.loss(output.mean().cuda(), label.mean().cuda())
 
-    def create_conv_net(self, hilb_mode=False):
+    def create_conv_net(self, mode='audio'):
         self.process_layers = []
 
         self.sr = SAMPLE_RATE
-        self.total_samp_out = TOTAL_SAMPLES_OUT
+        if mode == 'audio':
+            self.total_samp_out = TOTAL_SAMPLES_OUT
+            self.n_channels = N_CHANNELS
+            ct = nn.ConvTranspose1d
+            cv = nn.Conv1d
+            bn = nn.BatchNorm1d
+        elif mode == 'mel':            
+            self.n_channels = N_GEN_MEL_CHANNELS
+            self.n_bins = N_GEN_FFT // 2 + 1
+            self.total_samp_out = self.n_bins * self.n_channels
+            ct = nn.ConvTranspose2d
+            cv = nn.Conv2d
+            bn = nn.BatchNorm2d
         self.n_batches = N_BATCHES
 
         self.padding_mode = 'reflect'
 
         self.stride1 = GEN_STRIDE1
         self.scale = GEN_SCALE
-        self.channels = N_CHANNELS
-        
-        self.n_rnn = 2
 
         v_cprint("*-"*39 + "*")
         v_cprint("Target length is", self.total_samp_out, "samples.")
@@ -108,6 +115,9 @@ class TAGenerator(nn.Module):
             #nn.Linear(TOTAL_SAMPLES_IN, self.kernel_size*self.shuffle_fac*TOTAL_SAMPLES_IN*N_BATCHES).cuda()
             nn.ReLU(True).cuda(),
         ]
+        # if mode == 'mel':
+        #     v_cprint("Creating Mel Spectrogram layer.")
+        #     self.initial_layers.append(torchaudio.transforms.MelSpectrogram(self.sr, TOTAL_SAMPLES_IN, n_mels=self.n_channels))
         
         self.n_processing_indices = 1
         #self.max_Lout = stride_quotient*self.total_samp_out//N_BATCHES
@@ -116,7 +126,7 @@ class TAGenerator(nn.Module):
         s_t = self.stride1
         s_c = 2
         k_t = GEN_KERNEL_SIZE
-        samps_pre_transpose = BATCH_SIZE*N_CHANNELS*TOTAL_SAMPLES_IN
+        samps_pre_transpose = BATCH_SIZE*TOTAL_SAMPLES_IN * self.n_channels
         samps_post_transpose = samps_pre_transpose * s_t
         samps_post_conv = samps_post_transpose // s_c
         while samps_post_conv < self.total_samp_out or self.n_processing_indices < MIN_N_GEN_LAYERS+1:
@@ -127,25 +137,25 @@ class TAGenerator(nn.Module):
             #n_batches = int(Lout // (N_CHANNELS * self.kernel_size * BATCH_OPTIMIZATION_FACTOR))
             v_cprint("="*80)
             v_cprint("Creating ConvTranspose1d layer.", samps_pre_transpose, ">", samps_post_transpose)
-            self.process_layers.append(nn.ConvTranspose1d(
-                self.channels, self.channels, groups=1, 
+            self.process_layers.append(ct(
+                self.n_channels, self.n_channels, groups=1,
                 kernel_size=k_t, stride=s_t, padding=0, dilation=1
             ).cuda())
             
             v_cprint("Creating Normalization layer.")
-            self.process_layers.append(nn.BatchNorm1d(self.channels).cuda())
+            self.process_layers.append(bn(self.n_channels).cuda())
             v_cprint("Creating Activation layer.")
             self.process_layers.append(nn.ReLU(True).cuda())
             #Lin = int(BATCH_SIZE*(2**GEN_SAMPLE_RATE_FACTOR)*(SAMPLE_RATE/44100))
             v_cprint("Creating Conv1d layer.", samps_post_transpose, ">", samps_post_conv)
-            self.process_layers.append(nn.Conv1d(
-                self.channels, self.channels, groups=1,
+            self.process_layers.append(cv(
+                self.n_channels, self.n_channels, groups=1,
                 kernel_size=1, stride=s_c, padding=0, dilation=1
             ).cuda())
             self.n_processing_indices += 1
             #if samps_post_conv > self.total_samp_out or self.n_processing_indices < MIN_N_GEN_LAYERS:
             v_cprint("Creating Normalization layer.")
-            self.process_layers.append(nn.BatchNorm1d(self.channels).cuda())
+            self.process_layers.append(bn(self.n_channels).cuda())
             v_cprint("Creating Activation layer.")
             self.process_layers.append(nn.ReLU(True).cuda())
             old_s_t = s_t
@@ -154,10 +164,13 @@ class TAGenerator(nn.Module):
             samps_post_transpose = samps_pre_transpose * s_t
             samps_post_conv = samps_post_transpose // s_c
             if samps_post_conv >= self.total_samp_out:
-                quot = samps_post_conv / (self.total_samp_out)
-                s_t = old_s_t
+                #quot = samps_post_conv / (self.total_samp_out)
+                s_t = 1
                 k_t = 1
-                s_c = 8
+                s_c = 4
+            else:
+                s_t = s_t * self.scale
+                s_c = 2
             
 
             
@@ -166,12 +179,21 @@ class TAGenerator(nn.Module):
         v_cprint("Created", self.n_processing_indices-1, "sets of processing layers.")
 
         v_cprint("Creating final layers.")
-        self.final_layers = [
-            nn.Flatten().cuda(),
-            nn.Tanh().cuda(),
-            #torchaudio.transforms.Resample(self.sr, SAMPLE_RATE),
-            #nn.Flatten().cuda(),
-        ]
+        if mode == 'mel':
+            self.final_layers = [
+                # torchaudio.transforms.InverseMelScale(self.n_bins, self.n_channels, self.sr),
+                # nn.Flatten().cuda(),
+                # nn.Tanh().cuda(),
+                # #torchaudio.transforms.Resample(self.sr, SAMPLE_RATE),
+                # nn.Flatten().cuda(),
+            ]
+        else:
+            self.final_layers = [
+                nn.Flatten().cuda(),
+                nn.Tanh().cuda(),
+                #torchaudio.transforms.Resample(self.sr, SAMPLE_RATE),
+                nn.Flatten().cuda(),
+            ]
         
         self.initial_layers = nn.Sequential(*self.initial_layers).cuda()
         self.process_layers = nn.Sequential(*self.process_layers).cuda()
@@ -180,39 +202,52 @@ class TAGenerator(nn.Module):
     def create_rnn_net(self, hilb_mode=False):
         pass
 
-    def run_conv_net(self, data, hilb_mode=False):
-        pre_init = data.flatten()
+    def run_conv_net(self, data, mode):
+        pre_init = data.flatten().float()
         vv_cprint("|}} Initial data.shape:", pre_init.shape)
-        post_init = self.initial_layers.forward(pre_init.float())
-
-        batched = ag.Variable(post_init.clone().reshape((BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN)))
+        if mode == 'mel':
+            # no need to batch audio that's going to be Mel transformed
+            post_init = self.initial_layers(pre_init.clone()).flatten()
+            melspec = MelWithGradients.apply(post_init, TOTAL_SAMPLES_IN, N_GEN_MEL_CHANNELS, 1)
+            pre_process = melspec.unsqueeze(0).unsqueeze(-1)
+        else:
+            batched = pre_init.clone().reshape((BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN))
+            pre_process = self.initial_layers(batched.clone())
+        
         vv_cprint("|}} Initial layers done.")
-        vv_cprint("|}} data.shape:", batched.shape)
-        post_process = ag.Variable(self.process_layers.forward(batched).flatten()[:self.total_samp_out])
+        vv_cprint("|}} data.shape:", pre_process.shape)
+        if mode == 'mel':
+            post_process = self.process_layers(pre_process.clone())
+        else:
+            post_process = self.process_layers(pre_process.clone())
         vv_cprint("|}} Processing layers done.")
         vv_cprint("|}} data.shape:", post_process.shape)
-
-        #batched_rnn = ag.Variable(post_process.clone().reshape((2*N_CHANNELS, N_BATCHES, SAMPLES_PER_BATCH)))
+        post_final = self.final_layers(post_process.clone().requires_grad_(True))
+        if mode == 'mel' and DIS_MODE == 2:
+            ret = post_final.clone().squeeze()[:, :TOTAL_SAMPLES_OUT]
+        elif mode == 'mel':
+            invmel_inp = post_final.clone().squeeze()[:, :TOTAL_SAMPLES_OUT]
+            ret = InverseMelWithGradients.apply(invmel_inp, N_GEN_FFT, TOTAL_SAMPLES_OUT//N_GEN_FFT).flatten()[:TOTAL_SAMPLES_OUT]
+        else:
+            ret = post_final.clone().flatten()[:TOTAL_SAMPLES_OUT]
+        vv_cprint("|}} Final layers done.")
+        vv_cprint("|}} data.shape:", ret.shape)
         
-        #post_rnn, self.rnn_state = self.rnn_layers(batched_rnn, self.rnn_state)
-        #vv_cprint("|}} RNN layers done.")
-        #vv_cprint("|}} data.shape:", post_rnn.shape)
+        return ret
 
-        # post_final = self.final_layers.forward(post_rnn).flatten()
-        # vv_cprint("|}} Final layer done.")
-        # vv_cprint("|}} Final data.shape:", post_final.shape)
-        return post_process.flatten()
-
-    def gen_dense(self, inputs):
-        assert(GEN_MODE in (2, 3))
+    def gen_conv(self, inputs, mode):
+        assert(GEN_MODE in (2, 3, 4))
         vv_cprint("|} Ready for launch! Going to the net now, wheeee!")
         #prepped = DataBatchPrep.apply(inputs, 1, TOTAL_SAMPLES_IN, None)
-        post_net = self.run_conv_net(inputs, hilb_mode=False)[:TOTAL_SAMPLES_OUT].squeeze()
-        if not torch.isfinite(post_net[0]):
-            print("Warning, got invalid output!")
-        vv_cprint("|} Whew... Made it out of the net alive!")
+        post_net = self.run_conv_net(inputs, mode)[:TOTAL_SAMPLES_OUT].squeeze()
         
-        return normalize_data(post_net[:TOTAL_SAMPLES_OUT])
+        vv_cprint("|} Whew... Made it out of the net alive!")
+        if mode == 'mel':
+            return post_net
+        else:
+            if not torch.isfinite(post_net[0]):
+                print("Warning, got invalid output!")
+            return normalize_audio(post_net[:TOTAL_SAMPLES_OUT])
 
     def gen_fn(self, inputs):
         if GEN_MODE == 0:
@@ -226,7 +261,9 @@ class TAGenerator(nn.Module):
         if GEN_MODE == 2:
             return None
         if GEN_MODE == 3:
-            return self.gen_dense(inputs)
+            return self.gen_conv(inputs, 'audio')
+        if GEN_MODE == 4:
+            return self.gen_conv(inputs, 'mel')
         else:
             return None
     

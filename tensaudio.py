@@ -31,7 +31,6 @@ from hilbert import *
 
 #os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 #torch.autograd.set_detect_anomaly(True)
-torchaudio.set_audio_backend('soundfile')
 plt.switch_backend('agg')
 
 np.random.seed(int(round(time.time())))
@@ -46,7 +45,7 @@ total_fake_verdicts = []
 current_view_mode = 1
 current_output = np.zeros(TOTAL_SAMPLES_OUT)
 current_example = np.zeros(TOTAL_SAMPLES_OUT)
-vis_paused = False
+vis_paused = True
 
 def clear_metrics():
     global total_gen_losses, total_dis_losses, total_fake_verdicts, total_real_verdicts
@@ -121,6 +120,9 @@ def plot_metrics(i, save_to_disk=False):
             plt.title('Progress Spectrogram')
         #spec_out = librosa.feature.melspectrogram(current_output, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
         #librosa.display.specshow(librosa.power_to_db(spec_out, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
+        if GEN_MODE == 4 and DIS_MODE == 2:
+            global current_output
+            current_output = librosa.feature.inverse.mel_to_audio(current_output, sr=SAMPLE_RATE, n_fft=VIS_N_FFT, hop_length=VIS_HOP_LEN)
         plt.specgram(current_output, VIS_N_FFT, mode='psd', cmap='magma')
         plt.colorbar(format='%+2.0f dB')
         plt.tight_layout()
@@ -238,14 +240,17 @@ class OneStep():
         super().__init__()
         self.generator = generator
 
+    @torch.no_grad()
     def generate_one_step(self, noise=None):
-        with torch.no_grad():
-            if noise is None:
-                noise = generate_input_noise().cuda()
-            self.generator.eval()
-            predicted_logits = self.generator(noise)
-            self.generator.train()
-            return torch.squeeze(predicted_logits)
+        if noise is None:
+            noise = generate_input_noise().cuda()
+        self.generator.eval()
+        predicted_logits = self.generator(noise.detach().clone())
+        if GEN_MODE == 4 and DIS_MODE == 2:
+            predicted_logits = librosa.feature.inverse.mel_to_audio(predicted_logits.detach().cpu().numpy(), sr=SAMPLE_RATE, n_fft=VIS_N_FFT, hop_length=VIS_HOP_LEN)
+            predicted_logits = torch.from_numpy(predicted_logits)
+        self.generator.train()
+        return torch.squeeze(predicted_logits)
 
 def create_input():
         #x = get_random_example()
@@ -261,7 +266,7 @@ def generate_input_noise():
     else:
         return torch.randn(BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
     
-training_noise = generate_input_noise()
+training_noise = ag.Variable(generate_input_noise(), requires_grad=True)
 gen_loss, dis_loss = None, None
 
 def weights_init(m):
@@ -307,11 +312,11 @@ def run_models(window, real):
 
     dis.zero_grad()
 
-    y1 = dis(real).view(-1)
-    label = torch.full(y1.shape, REAL_LABEL).to(torch.float).cuda()
-    dis_loss_real = dis.criterion(label, y1)
+    y = dis(real, False).view(-1)
+    label = torch.full(y.shape, REAL_LABEL).to(torch.float).cuda()
+    dis_loss_real = dis.criterion(label, y)
     dis_loss_real.backward()
-    real_verdict = y1.flatten().squeeze().mean().item()
+    real_verdict = y.flatten().squeeze().mean().item()
 
     if GEN_MODE in [5]:
         noise = generate_input_noise()
@@ -322,25 +327,25 @@ def run_models(window, real):
         noise = generate_input_noise()
         fake1 = gen(noise)
     
-    y2 = dis(fake1.detach()).view(-1)
-    fake_verdict = y2.flatten().squeeze().mean()
+    y = dis(fake1.detach(), True).view(-1)
+    fake_verdict = y.flatten().squeeze().mean()
     if torch.isnan(fake_verdict):
         raise RuntimeError("Discriminator output NaN!")
     label = label.fill_(FAKE_LABEL)
-    dis_loss_fake = dis.criterion(label, y2)
+    dis_loss_fake = dis.criterion(label, y)
     dis_loss_fake.backward()
     dis_loss = dis_loss_real + dis_loss_fake
     #dis_loss.backward(retain_graph=True)
     dis_optim.step()
 
     gen.zero_grad()
-    y3 = dis(fake1).view(-1)
+    y = dis(fake1, True).view(-1)
     
     label = label.fill_(REAL_LABEL)
     #label = torch.full(y3.shape, REAL_LABEL).to(torch.float).cuda()
-    gen_loss = gen.criterion(label, y3)
+    gen_loss = gen.criterion(label, y)
     gen_loss.backward()
-    fake_verdict = y3.flatten().squeeze().mean().item()
+    fake_verdict = y.flatten().squeeze().mean().item()
     gen_optim.step()
 
     real_str, fake_str = verdict_str(real_verdict, fake_verdict)
@@ -361,7 +366,7 @@ def run_models(window, real):
 
     return real, fake1, gen_loss.flatten().squeeze().mean(), dis_loss
 
-def save_states():
+def save_states(epoch):
     torch.save({
         'epoch': epoch,
         'gen_state': gen.state_dict(),
@@ -376,15 +381,14 @@ def train_on_random(window, epoch, dirname):
         z = torch.autograd.Variable(normalize_audio(torch.as_tensor(create_input())), requires_grad=True).cuda()
         begin_time = time.time()
         real, fake, gen_loss, dis_loss = run_models(window, z)
-        with torch.no_grad():
-            if not vis_paused:
-                if current_view_mode == 1:
-                    current_output = normalize_audio(fake.detach().clone()).cpu().numpy()
-                elif current_view_mode == 2:
-                    current_output = normalize_audio(onestep.generate_one_step(training_noise)).cpu().numpy()
-                current_example = normalize_audio(real.detach().clone()).cpu().numpy()
-            total_gen_losses.append(gen_loss.item())
-            total_dis_losses.append(dis_loss.item())
+        if not vis_paused:
+            if current_view_mode == 1:
+                current_output = fake.detach().clone().cpu().numpy()
+            elif current_view_mode == 2:
+                current_output = onestep.generate_one_step(training_noise).cpu().numpy()
+            current_example = normalize_audio(real.detach().clone()).cpu().numpy()
+        total_gen_losses.append(gen_loss.item())
+        total_dis_losses.append(dis_loss.item())
 
         window.addstr(8,0, "|] Gen Loss:\t\t"+ str(round(float(gen_loss), 4)))
         window.addstr(9,0, "|] Dis Loss:\t\t"+ str(round(float(dis_loss), 4)))
@@ -399,7 +403,7 @@ def train_on_random(window, epoch, dirname):
             #window.clrtoeol()
             window.addstr(10,40, "Saving model states...")
             window.refresh()
-            save_states()
+            save_states(epoch)
         else:
             pass
             #window.move(10,40)
@@ -410,7 +414,6 @@ def train_on_random(window, epoch, dirname):
 clear = lambda: os.system('cls' if os.name=='nt' else 'clear')
 
 def generate_progress_report(window, epoch, dirname, num_times_saved, force=False):
-    global vis_paused
     #cprint("Generating progress update...")
     #time.sleep(0.5)
     if num_times_saved == 0:
@@ -489,7 +492,7 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                         window.clrtoeol()
                         window.addstr(10,40, "Saving model states...")
                         window.refresh()
-                        save_states()
+                        save_states(epoch)
                         return i
                     elif ev.type == KEYDOWN:
                         if ev.key == K_s:
@@ -497,7 +500,7 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                             window.clrtoeol()
                             window.addstr(10,40, "Saving model states...")
                             window.refresh()
-                            save_states()
+                            save_states(epoch)
                             window.move(10,40)
                             window.clrtoeol()
                             window.refresh()
@@ -529,7 +532,7 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                                 current_view_mode = 2
                             elif current_view_mode == 2:
                                 current_view_mode = 1
-                ta_clk.tick(60)
+                ta_clk.tick(144)
             except:
                 pass
 
@@ -585,7 +588,7 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
         window.refresh()
     except curses.error:
         pass
-    save_states()
+    save_states(epoch)
     return i
 
 
@@ -658,11 +661,12 @@ if __name__ == "__main__":
 
     i = curses.wrapper(train_until_interrupt, epoch, True)
     print("Generating...")
-    if GEN_MODE in [5]:
-        params = onestep.generate_one_step()
-        data = get_output_from_params(params, None)
-    else:
-        data = onestep.generate_one_step()
+    with torch.no_grad():
+        if GEN_MODE in [5]:
+            params = onestep.generate_one_step()
+            data = get_output_from_params(params, None)
+        else:
+            data = onestep.generate_one_step()
     print("Done!")
     if G_csi:
         G_csi.stop()

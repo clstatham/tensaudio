@@ -13,7 +13,8 @@ VIS_WIDTH = 1200
 VIS_HEIGHT = 700
 VIS_UPDATE_INTERVAL = 1 # iterations
 
-VIS_N_FFT = 2**10
+VIS_N_FFT = 128
+VIS_HOP_LEN = 128
 
 # set to 0 to run until visualizer is closed
 MAX_ITERS = 0
@@ -32,23 +33,28 @@ VERBOSITY_LEVEL = 1 # 0, 1, 2
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
 # an error!
-GEN_MODE = 3            # 0 = RNN/Hilbert mode
+GEN_MODE = 4            # 0 = RNN/Hilbert mode
                         # 1 = RNN/Audio mode
                         # 2 = Conv/Hilbert mode
                         # 3 = Conv/Audio mode
+                        # 4 = Conv/Mel mode
                         # 5 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
-SAMPLE_RATE = 44100
+SAMPLE_RATE = 22050
 GEN_SAMPLE_RATE_FACTOR = 1
 SUBTYPE = 'PCM_16'
-INPUT_DURATION = 2**2 / SAMPLE_RATE
+INPUT_DURATION = 32 / SAMPLE_RATE
 OUTPUT_DURATION = 2**15 / SAMPLE_RATE # power of 2 samples
-GEN_KERNEL_SIZE = 2**8    # higher = more memory
-GEN_STRIDE1 = 8         # higher = more memory
+N_CHANNELS = 4
+GEN_KERNEL_SIZE = 1    # higher = more memory
+GEN_STRIDE1 = 1         # higher = more memory
 #GEN_STRIDE2 = 1         # higher = more memory
 #GEN_SCALE1 = 3          # higher = more memory, must be 2 or greater
 GEN_SCALE = 2        # higher = more memory, must be 2 or greater
-MIN_N_GEN_LAYERS = 8
+MIN_N_GEN_LAYERS = 1
+# Mel mode only
+N_GEN_MEL_CHANNELS = 128
+N_GEN_FFT = 128
 # RNN mode only
 N_RNN_LAYERS = 4
 # CSound mode only
@@ -57,7 +63,7 @@ KONTROL_SAMPLES = 64
 PARAM_UPDATE_SAMPLES = SAMPLE_RATE*OUTPUT_DURATION
 TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
 # Non-CSound mode only
-BATCH_SIZE = GEN_KERNEL_SIZE # also a power of 2, lower = more efficient but lower quality
+BATCH_SIZE = 1 # also a power of 2, lower = more efficient but lower quality
 
 # Hyperparameters
 GENERATOR_LR = 0.0001
@@ -69,15 +75,15 @@ GENERATOR_BETA = 0.5
 # an error!
 INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
                         # 'conv' = comparison of example and convolved example result
-DIS_MODE = 1            # 0 = Direct mode
+DIS_MODE = 2            # 0 = Direct mode
                         # 1 = FFT mode
                         # 2 = Mel mode
                         # 3 = Hilbert mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
-N_DIS_LAYERS = 3
+N_DIS_LAYERS = 2
 DIS_STRIDE = 16
-DIS_KERNEL_SIZE = 2**2
+DIS_KERNEL_SIZE = 1
 DIS_N_FFT = 2**8
 #DIS_HOP_LEN = 64
 DIS_N_MELS = 128
@@ -102,11 +108,6 @@ import curses
 
 TOTAL_SAMPLES_IN = int(SAMPLE_RATE * INPUT_DURATION)
 TOTAL_SAMPLES_OUT = int(SAMPLE_RATE * OUTPUT_DURATION)
-if GEN_MODE in [0, 2]:
-    N_CHANNELS = 2
-else:
-    N_CHANNELS = 1
-
 N_BATCHES = int(TOTAL_SAMPLES_OUT // BATCH_SIZE)
 if TOTAL_SAMPLES_OUT % BATCH_SIZE != 0:
     raise ValueError("Could not calculate N_BATCHES: Total length of audio not divisible by", (BATCH_SIZE))

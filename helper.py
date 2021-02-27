@@ -395,50 +395,34 @@ def write_normalized_audio_to_disk(sig, fn):
   scaled = np.int16(sig_numpy * 32767)
   soundfile.write(fn, scaled, SAMPLE_RATE, SUBTYPE)
 
-class FFTWithGradients(Function):
+class MelWithGradients(Function):
     @staticmethod
-    def forward(ctx, p):
+    def forward(ctx, p, n_fft, n_mels, hop_len):
         p_ = p.detach().cpu().numpy()
-        result = np.fft.fft(p_.astype('float32'))
-        real = np.real(result)
-        ctx.save_for_backward(real)
-        imag = np.imag(result)
-        ctx.save_for_backward(imag)
-        mag = np.sqrt(real**2 + imag**2)
-        phas = np.arctan2(real, imag)
-        return p.new((mag, phas))
+        #stft = librosa.stft(p_, n_fft=n_fft)
+        ctx.save_for_backward(p, torch.as_tensor(n_fft), torch.as_tensor(n_mels), torch.as_tensor(hop_len))
+        melspec = librosa.feature.melspectrogram(p_, sr=SAMPLE_RATE, n_fft=n_fft, n_mels=n_mels, hop_length=hop_len)
+        return p.new(melspec)
 
     @staticmethod
     def backward(ctx, grad_output):
         if grad_output is None:
-          return None, None
-        numpy_go = grad_output.cpu().numpy()
-        #print(numpy_go.shape)
-        data = []
-        for i in range(len(ctx.real)):
-          d = []
-          for j in range(len(ctx.real[i])):
-            d.append(np.complex(ctx.real[i][j], ctx.imag[i][j]))
-          data.append(d)
-        data = np.array(data)
-        orig_size = data.size//2
-        #print(orig_size)
-        result = np.fft.ifft(data)
-        #print(result.shape)
-        result, _ = ensure_size(result, TOTAL_SAMPLES_OUT, channels=1)
-        return grad_output.new(result)
+          return None, None, None, None
+        #numpy_go = grad_output.cpu().numpy()
+        return ctx.saved_tensors[0], None, None, None
 
-class InverseFFTWithGradients(Function):
+class InverseMelWithGradients(Function):
     @staticmethod
-    def forward(ctx, p):
+    def forward(ctx, p, n_fft, hop_len):
         p_ = p.detach().cpu().numpy()
-        result = np.fft.ifft(p_)
-        return p.new((np.real(result), np.imag(result)))
+        #stft = librosa.stft(p_, n_fft=n_fft)
+        ctx.save_for_backward(p, torch.as_tensor(n_fft), torch.as_tensor(hop_len))
+        audio = librosa.feature.inverse.mel_to_audio(p_, sr=SAMPLE_RATE, n_fft=n_fft, hop_length=hop_len)
+        return p.new(audio)
 
     @staticmethod
     def backward(ctx, grad_output):
         if grad_output is None:
-          return None, None
-        numpy_go = grad_output.cpu().numpy()
-        result = np.fft.fft(numpy_go)
-        return grad_output.new((np.real(result), np.imag(result)))
+          return None, None, None
+        #numpy_go = grad_output.cpu().numpy()
+        return ctx.saved_tensors[0], None, None
