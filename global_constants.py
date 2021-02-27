@@ -38,12 +38,16 @@ GEN_MODE = 3            # 0 = RNN/Hilbert mode
                         # 3 = Conv/Audio mode
                         # 5 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
-SAMPLE_RATE = 22050
+SAMPLE_RATE = 16000
 GEN_SAMPLE_RATE_FACTOR = 1
 SUBTYPE = 'PCM_16'
-INPUT_DURATION = 2**8 / SAMPLE_RATE
-OUTPUT_DURATION = 2**16 / SAMPLE_RATE # power of 2 samples
-GEN_KERNEL_SIZE = 2
+INPUT_DURATION = 2**2 / SAMPLE_RATE
+OUTPUT_DURATION = 2**15 / SAMPLE_RATE # power of 2 samples
+GEN_KERNEL_SIZE = 2**14    # higher = more memory
+GEN_STRIDE1 = 2**14         # higher = more memory
+GEN_STRIDE2 = 1         # higher = more memory
+GEN_SCALE1 = 2**14          # higher = more memory, must be 2 or greater
+GEN_SCALE2 = 1.1        # higher = more memory, must be 1 or greater, can have decimals
 MIN_N_GEN_LAYERS = 1
 # RNN mode only
 N_RNN_LAYERS = 4
@@ -53,12 +57,11 @@ KONTROL_SAMPLES = 64
 PARAM_UPDATE_SAMPLES = SAMPLE_RATE*OUTPUT_DURATION
 TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
 # Non-CSound mode only
-N_PROCESS_LAYERS = 4
-BATCH_SIZE = 2**14 # also a power of 2, lower = more efficient but lower quality
+BATCH_SIZE = SAMPLE_RATE * OUTPUT_DURATION // 2 # also a power of 2, lower = more efficient but lower quality
 
 # Hyperparameters
-GENERATOR_LR = 0.001
-GENERATOR_BETA = 0.4
+GENERATOR_LR = 0.0001
+GENERATOR_BETA = 0.5
 #GENERATOR_MOMENTUM = 0.02
 
 # If you change ANY of the following values, you MUST empty
@@ -66,22 +69,22 @@ GENERATOR_BETA = 0.4
 # an error!
 INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
                         # 'conv' = comparison of example and convolved example result
-DIS_MODE = 3            # 0 = Direct mode
+DIS_MODE = 1            # 0 = Direct mode
                         # 1 = FFT mode
                         # 2 = Mel mode
                         # 3 = Hilbert mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
 N_DIS_LAYERS = 3
-DIS_STRIDE = 8
-DIS_KERNEL_SIZE = 256
+DIS_STRIDE = 16
+DIS_KERNEL_SIZE = 2**5
 DIS_N_FFT = 2**11
 #DIS_HOP_LEN = 64
 DIS_N_MELS = 128
 DIS_FFT_VAL = 128
 
 # Hyperparameters
-DISCRIMINATOR_LR = 0.0015
+DISCRIMINATOR_LR = 0.0001
 DISCRIMINATOR_BETA = 0.5
 #DISCRIMINATOR_MOMENTUM = 0.2
 
@@ -104,8 +107,8 @@ if GEN_MODE in [0, 2]:
 else:
     N_CHANNELS = 1
 
-N_BATCHES = int(TOTAL_SAMPLES_OUT // (GEN_KERNEL_SIZE * BATCH_SIZE))
-if TOTAL_SAMPLES_OUT % (GEN_KERNEL_SIZE * BATCH_SIZE) != 0:
+N_BATCHES = int(TOTAL_SAMPLES_OUT // BATCH_SIZE)
+if TOTAL_SAMPLES_OUT % BATCH_SIZE != 0:
     raise ValueError("Could not calculate N_BATCHES: Total length of audio not divisible by", (BATCH_SIZE))
 N_TIMESTEPS_PER_KERNEL = int(SAMPLE_RATE*OUTPUT_DURATION // (GEN_KERNEL_SIZE * N_BATCHES))
 SAMPLES_PER_BATCH = int(TOTAL_SAMPLES_OUT // N_BATCHES)

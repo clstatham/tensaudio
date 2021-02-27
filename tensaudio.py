@@ -163,7 +163,12 @@ def open_truncate_pad(name):
         data = torch.as_tensor(f.read()).requires_grad_(True)
         sr = torch.as_tensor(f.samplerate).unsqueeze(0)
         #stacked = torch.stack((data, sr)).requires_grad_(True)
-        ret.append(data)
+        if len(data.shape) > 1 and data.shape[1] != 1:
+            data = data.permute(1,0)[0]
+        sr_quotient = f.samplerate / SAMPLE_RATE
+        new_len = OUTPUT_DURATION * sr_quotient
+        new_samples = int(new_len * f.samplerate)
+        ret.append(data[:new_samples])
         srs = torch.cat((srs.detach().requires_grad_(True), sr))
     return ret, srs
 
@@ -175,9 +180,9 @@ def iterate_and_resample(files, srs):
             fil = fil.permute(1,0)[0]
         #fortfil = np.asfortranarray(fil.detach().requires_grad_(True).cpu().numpy())
         #a = librosa.resample(fortfil, srs[i].item(), SAMPLE_RATE)
-        a = torchaudio.transforms.Resample(srs[i].item(), SAMPLE_RATE).forward(fil)
+        a = torchaudio.transforms.Resample(srs[i].item(), SAMPLE_RATE).forward(fil.detach().clone())
         # = torch.from_numpy(a).requires_grad_(True)
-        arr.append(a)
+        arr.append(a[:TOTAL_SAMPLES_OUT])
     return arr
 
 
@@ -385,20 +390,21 @@ def train_on_random(window, epoch, dirname):
         window.addstr(9,0, "|] Dis Loss:\t\t"+ str(round(float(dis_loss), 4)))
 
         time_diff = time.time() - begin_time
-        window.move(10,0)
-        window.clrtoeol()
+        #window.move(10,0)
+        #window.clrtoeol()
         window.addstr(10,0, "Time per iteration: "+ str(round(time_diff, ndigits=2))+ " seconds.")
         window.refresh()
         if SAVE_MODEL_EVERY_ITERS > 0 and epoch % SAVE_MODEL_EVERY_ITERS == 0:
-            window.move(10,40)
-            window.clrtoeol()
+            #window.move(10,40)
+            #window.clrtoeol()
             window.addstr(10,40, "Saving model states...")
             window.refresh()
             save_states()
         else:
-            window.move(10,40)
-            window.clrtoeol()
-            window.refresh()
+            pass
+            #window.move(10,40)
+            #window.clrtoeol()
+            #window.refresh()
         yield time_diff
 
 clear = lambda: os.system('cls' if os.name=='nt' else 'clear')
@@ -616,6 +622,7 @@ if __name__ == "__main__":
     dis_optim = torch.optim.Adam(dis.parameters(), lr=DISCRIMINATOR_LR, betas=(DISCRIMINATOR_BETA, 0.999))
     #dis_optim = torch.optim.RMSprop(dis.parameters(), lr=DISCRIMINATOR_LR, momentum=DISCRIMINATOR_MOMENTUM)
     #gen = TAInstParamGenerator().cuda()
+    print("Attempting to load states from disk...")
     try:
         checkpoint = torch.load(os.path.join(MODEL_DIR, "checkpoints", "checkpoint.pt"))
         gen.load_state_dict(checkpoint['gen_state'])
@@ -623,7 +630,7 @@ if __name__ == "__main__":
         gen_optim.load_state_dict(checkpoint['gen_optim_state'])
         dis_optim.load_state_dict(checkpoint['dis_optim_state'])
         epoch = checkpoint['epoch']
-        print("!!!Loaded model states from saved checkpoints!!!")
+        print("!!!Loaded model states from disk!!!")
         print("Starting at epoch", epoch)
     except:
         gen.apply(weights_init)

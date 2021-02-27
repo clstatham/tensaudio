@@ -97,10 +97,10 @@ class TAGenerator(nn.Module):
         self.dilation = 1
         self.output_padding = 0
 
-        self.stride1 = 4
-        self.stride2 = 1
-        self.scale1 = 2
-        self.scale2 = 1.1
+        self.stride1 = GEN_STRIDE1
+        self.stride2 = GEN_STRIDE2
+        self.scale1 = GEN_SCALE1
+        self.scale2 = GEN_SCALE2
         
         self.n_rnn = 2
 
@@ -111,14 +111,15 @@ class TAGenerator(nn.Module):
         #self.initial_layer = nn.ReLU().cuda()
         self.initial_layers = [
             #nn.Linear(TOTAL_SAMPLES_IN, self.kernel_size*self.shuffle_fac*TOTAL_SAMPLES_IN*N_BATCHES).cuda()
-            nn.ReLU(inplace=True).cuda(),
+            nn.ReLU(True).cuda(),
         ]
 
+        stride_quotient = self.stride2 / self.stride1
         self.n_processing_indices = 1
-        self.max_Lout = self.stride2*self.total_samp_out//(self.n_batches*self.stride1)
-        Lin = TOTAL_SAMPLES_IN*GEN_SAMPLE_RATE_FACTOR
+        self.max_Lout = stride_quotient*self.total_samp_out//N_BATCHES
+        Lin = TOTAL_SAMPLES_IN*GEN_SAMPLE_RATE_FACTOR//2
         Lout = Lin
-        while Lout < self.max_Lout or self.n_processing_indices < MIN_N_GEN_LAYERS:
+        while Lout < self.max_Lout or self.n_processing_indices < MIN_N_GEN_LAYERS+1:
             #Lin = int(Lin * self.scale)
             Lout = int(self.scale1 * Lin)
             Lout = int(min(Lout, self.max_Lout))
@@ -135,17 +136,20 @@ class TAGenerator(nn.Module):
             v_cprint("Creating Normalization layer.")
             self.process_layers.append(nn.BatchNorm1d(Lout_scaled2).cuda())
             v_cprint("Creating Activation layer.")
-            self.process_layers.append(nn.ReLU().cuda())
+            self.process_layers.append(nn.ReLU(True).cuda())
             #Lin = int(BATCH_SIZE*(2**GEN_SAMPLE_RATE_FACTOR)*(SAMPLE_RATE/44100))
-            Lin  = Lout*self.stride2
-            v_cprint("Creating Conv1d layer.", Lout_scaled2, ">", Lin)
-            self.process_layers.append(nn.Conv1d(Lout_scaled2, Lin, groups=1, kernel_size=1, stride=self.stride2, padding=0, dilation=1).cuda())
-            v_cprint("Creating Normalization layer.")
-            self.process_layers.append(nn.BatchNorm1d(Lin).cuda())
-            v_cprint("Creating Activation layer.")
-            self.process_layers.append(nn.ReLU().cuda())
-
+            v_cprint("Creating Conv1d layer.", Lout_scaled2, ">", Lout)
+            self.process_layers.append(nn.Conv1d(Lout_scaled2, Lout, groups=1, kernel_size=1, stride=self.stride2, padding=0, dilation=1).cuda())
             self.n_processing_indices += 1
+            if Lout < self.max_Lout or self.n_processing_indices < MIN_N_GEN_LAYERS:
+                # only do this if we're not on the last one
+                v_cprint("Creating Normalization layer.")
+                self.process_layers.append(nn.BatchNorm1d(Lout).cuda())
+                v_cprint("Creating Activation layer.")
+                self.process_layers.append(nn.ReLU(True).cuda())
+            Lin  = Lout
+
+            
         
         v_cprint("="*80)
         v_cprint("Created", self.n_processing_indices-1, "sets of processing layers.")
@@ -153,9 +157,9 @@ class TAGenerator(nn.Module):
         v_cprint("Creating final layers.")
         self.final_layers = [
             nn.Flatten().cuda(),
-            torchaudio.transforms.Resample(self.sr, SAMPLE_RATE),            
-            #nn.Tanh().cuda(),
-            nn.Flatten().cuda(),
+            nn.Tanh().cuda(),
+            torchaudio.transforms.Resample(self.sr, SAMPLE_RATE),
+            #nn.Flatten().cuda(),
         ]
         
         self.initial_layers = nn.Sequential(*self.initial_layers).cuda()
@@ -170,7 +174,7 @@ class TAGenerator(nn.Module):
         vv_cprint("|}} Initial data.shape:", pre_init.shape)
         post_init = self.initial_layers.forward(pre_init.float())
 
-        batched = ag.Variable(post_init.clone().reshape((self.n_batches, GEN_SAMPLE_RATE_FACTOR*TOTAL_SAMPLES_IN, self.kernel_size)))
+        batched = ag.Variable(post_init.clone().reshape((self.n_batches, GEN_SAMPLE_RATE_FACTOR*TOTAL_SAMPLES_IN//2, self.kernel_size*2)))
         vv_cprint("|}} Initial layers done.")
         vv_cprint("|}} data.shape:", batched.shape)
         post_process = ag.Variable(self.process_layers.forward(batched).flatten()[:self.total_samp_out])
