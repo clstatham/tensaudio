@@ -11,10 +11,10 @@ MODEL_DIR = "D:\\tensaudio_models"
 # must be divisible by 100
 VIS_WIDTH = 1200
 VIS_HEIGHT = 700
-VIS_UPDATE_INTERVAL = 1 # iterations
+VIS_UPDATE_INTERVAL = 25 # iterations
 
-VIS_N_FFT = 128
-VIS_HOP_LEN = 128
+VIS_N_FFT = 512
+VIS_HOP_LEN = 1
 
 # set to 0 to run until visualizer is closed
 MAX_ITERS = 0
@@ -30,6 +30,9 @@ SAVE_MODEL_EVERY_ITERS = 10000
 
 VERBOSITY_LEVEL = 1 # 0, 1, 2
 
+GRIFFIN_LIM_MAX_ITERS_PREVIEW = 1
+GRIFFIN_LIM_MAX_ITERS_SAVING = 16
+
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
 # an error!
@@ -38,23 +41,27 @@ GEN_MODE = 4            # 0 = RNN/Hilbert mode
                         # 2 = Conv/Hilbert mode
                         # 3 = Conv/Audio mode
                         # 4 = Conv/Mel mode
-                        # 5 = CSound Synthesizer mode
+                        # 5 = Conv/STFT mode
+                        # 10 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
 SAMPLE_RATE = 22050
 GEN_SAMPLE_RATE_FACTOR = 1
 SUBTYPE = 'PCM_16'
 INPUT_DURATION = 32 / SAMPLE_RATE
-OUTPUT_DURATION = 2**15 / SAMPLE_RATE # power of 2 samples
-N_CHANNELS = 4
+OUTPUT_DURATION = 2**16 / SAMPLE_RATE # power of 2 samples
 GEN_KERNEL_SIZE = 1    # higher = more memory
-GEN_STRIDE1 = 1         # higher = more memory
+GEN_STRIDE1 = 2         # higher = more memory
 #GEN_STRIDE2 = 1         # higher = more memory
 #GEN_SCALE1 = 3          # higher = more memory, must be 2 or greater
 GEN_SCALE = 2        # higher = more memory, must be 2 or greater
 MIN_N_GEN_LAYERS = 1
+# Non-Mel mode only
+N_CHANNELS = 4
 # Mel mode only
 N_GEN_MEL_CHANNELS = 128
-N_GEN_FFT = 128
+# Hilbert, STFT, and Mel mode only
+N_GEN_FFT = VIS_N_FFT
+GEN_HOP_LEN = VIS_HOP_LEN
 # RNN mode only
 N_RNN_LAYERS = 4
 # CSound mode only
@@ -84,10 +91,11 @@ FAKE_LABEL = 0.
 N_DIS_LAYERS = 2
 DIS_STRIDE = 16
 DIS_KERNEL_SIZE = 1
-DIS_N_FFT = 2**8
+DIS_N_FFT = N_GEN_FFT
 #DIS_HOP_LEN = 64
-DIS_N_MELS = 128
-DIS_FFT_VAL = 128
+DIS_N_MELS = N_GEN_MEL_CHANNELS
+DIS_HOP_LEN = GEN_HOP_LEN
+#DIS_FFT_VAL = N_GEN_FFT
 
 # Hyperparameters
 DISCRIMINATOR_LR = 0.0001

@@ -4,3 +4,11 @@
 *.pyc
 .vscode/.ropeproject/objectdb
 csound64.dll
+*.obj
+*.ipch
+*.db
+x64/*
+.vs/*
+.vscode/*
+.user
+.filters

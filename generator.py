@@ -87,18 +87,24 @@ class TAGenerator(nn.Module):
 
         self.sr = SAMPLE_RATE
         if mode == 'audio':
-            self.total_samp_out = TOTAL_SAMPLES_OUT
             self.n_channels = N_CHANNELS
+            self.total_samp_out = TOTAL_SAMPLES_OUT
             ct = nn.ConvTranspose1d
             cv = nn.Conv1d
             bn = nn.BatchNorm1d
         elif mode == 'mel':            
             self.n_channels = N_GEN_MEL_CHANNELS
             self.n_bins = N_GEN_FFT // 2 + 1
-            self.total_samp_out = self.n_bins * self.n_channels
+            self.total_samp_out = self.n_bins * TOTAL_SAMPLES_OUT
             ct = nn.ConvTranspose2d
             cv = nn.Conv2d
             bn = nn.BatchNorm2d
+        elif mode == 'hilbert':
+            self.n_channels = 2
+            self.total_samp_out = self.n_channels * TOTAL_SAMPLES_OUT
+            ct = nn.ConvTranspose1d
+            cv = nn.Conv1d
+            bn = nn.BatchNorm1d
         self.n_batches = N_BATCHES
 
         self.padding_mode = 'reflect'
@@ -167,10 +173,16 @@ class TAGenerator(nn.Module):
                 #quot = samps_post_conv / (self.total_samp_out)
                 s_t = 1
                 k_t = 1
-                s_c = 4
+                if mode == 'hilbert':
+                    s_c = 2
+                else:
+                    s_c = 4
             else:
                 s_t = s_t * self.scale
-                s_c = 2
+                if mode == 'hilbert':
+                    s_c = 1
+                else:
+                    s_c = 2
             
 
             
@@ -179,7 +191,7 @@ class TAGenerator(nn.Module):
         v_cprint("Created", self.n_processing_indices-1, "sets of processing layers.")
 
         v_cprint("Creating final layers.")
-        if mode == 'mel':
+        if mode == 'mel' or mode == 'hilbert':
             self.final_layers = [
                 # torchaudio.transforms.InverseMelScale(self.n_bins, self.n_channels, self.sr),
                 # nn.Flatten().cuda(),
@@ -207,9 +219,15 @@ class TAGenerator(nn.Module):
         vv_cprint("|}} Initial data.shape:", pre_init.shape)
         if mode == 'mel':
             # no need to batch audio that's going to be Mel transformed
-            post_init = self.initial_layers(pre_init.clone()).flatten()
-            melspec = MelWithGradients.apply(post_init, TOTAL_SAMPLES_IN, N_GEN_MEL_CHANNELS, 1)
-            pre_process = melspec.unsqueeze(0).unsqueeze(-1)
+            post_init = self.initial_layers(pre_init.clone())
+            pre_process = post_init.reshape(BATCH_SIZE, self.n_channels, TOTAL_SAMPLES_IN).unsqueeze(-2)
+        elif mode == 'hilbert':
+            #post_init = self.initial_layers(pre_init.clone()).flatten()
+            #amp, phas = hilbert_from_scratch_pytorch(post_init)
+            #hilb = torch.stack((amp, phas)).cuda()
+            #pre_process = hilb.unsqueeze(0).unsqueeze(-1)
+            post_init = self.initial_layers(pre_init.clone())
+            pre_process = post_init.reshape(BATCH_SIZE, self.n_channels, TOTAL_SAMPLES_IN)
         else:
             batched = pre_init.clone().reshape((BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN))
             pre_process = self.initial_layers(batched.clone())
@@ -222,12 +240,15 @@ class TAGenerator(nn.Module):
             post_process = self.process_layers(pre_process.clone())
         vv_cprint("|}} Processing layers done.")
         vv_cprint("|}} data.shape:", post_process.shape)
-        post_final = self.final_layers(post_process.clone().requires_grad_(True))
+        post_final = self.final_layers(post_process.clone())
         if mode == 'mel' and DIS_MODE == 2:
-            ret = post_final.clone().squeeze()[:, :TOTAL_SAMPLES_OUT]
+            ret = post_final.clone()[:, :, :, :TOTAL_SAMPLES_OUT]
+        elif mode == 'hilbert':
+            invhilb_inp = post_final.clone().squeeze()[:, :TOTAL_SAMPLES_OUT]
+            ret = inverse_hilbert_pytorch(invhilb_inp[0], invhilb_inp[1]).flatten()#[:TOTAL_SAMPLES_OUT]
         elif mode == 'mel':
             invmel_inp = post_final.clone().squeeze()[:, :TOTAL_SAMPLES_OUT]
-            ret = InverseMelWithGradients.apply(invmel_inp, N_GEN_FFT, TOTAL_SAMPLES_OUT//N_GEN_FFT).flatten()[:TOTAL_SAMPLES_OUT]
+            ret = InverseMelWithGradients.apply(invmel_inp, N_GEN_FFT, GEN_HOP_LEN).flatten()[:TOTAL_SAMPLES_OUT]
         else:
             ret = post_final.clone().flatten()[:TOTAL_SAMPLES_OUT]
         vv_cprint("|}} Final layers done.")
@@ -239,7 +260,7 @@ class TAGenerator(nn.Module):
         assert(GEN_MODE in (2, 3, 4))
         vv_cprint("|} Ready for launch! Going to the net now, wheeee!")
         #prepped = DataBatchPrep.apply(inputs, 1, TOTAL_SAMPLES_IN, None)
-        post_net = self.run_conv_net(inputs, mode)[:TOTAL_SAMPLES_OUT].squeeze()
+        post_net = self.run_conv_net(inputs, mode)
         
         vv_cprint("|} Whew... Made it out of the net alive!")
         if mode == 'mel':
@@ -247,7 +268,7 @@ class TAGenerator(nn.Module):
         else:
             if not torch.isfinite(post_net[0]):
                 print("Warning, got invalid output!")
-            return normalize_audio(post_net[:TOTAL_SAMPLES_OUT])
+            return normalize_audio(post_net[:TOTAL_SAMPLES_OUT].squeeze())
 
     def gen_fn(self, inputs):
         if GEN_MODE == 0:
@@ -259,7 +280,7 @@ class TAGenerator(nn.Module):
             return None
             #return self.gen_rnn(inputs)
         if GEN_MODE == 2:
-            return None
+            return self.gen_conv(inputs, 'hilbert')
         if GEN_MODE == 3:
             return self.gen_conv(inputs, 'audio')
         if GEN_MODE == 4:

@@ -107,7 +107,7 @@ def plot_metrics(i, save_to_disk=False):
         canvas.draw()
         renderer = canvas.get_renderer()
         plots_img = renderer.tostring_rgb()
-        if save_to_disk and i % SAVE_EVERY_SECONDS == 0:
+        if save_to_disk:
             os.mkdir(dirname)
             fig3.savefig(os.path.join(dirname, filename3))
         size_plots = canvas.get_width_height()
@@ -122,8 +122,8 @@ def plot_metrics(i, save_to_disk=False):
         #librosa.display.specshow(librosa.power_to_db(spec_out, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
         if GEN_MODE == 4 and DIS_MODE == 2:
             global current_output
-            current_output = librosa.feature.inverse.mel_to_audio(current_output, sr=SAMPLE_RATE, n_fft=VIS_N_FFT, hop_length=VIS_HOP_LEN)
-        plt.specgram(current_output, VIS_N_FFT, mode='psd', cmap='magma')
+            current_output = InverseMelWithGradients.apply(torch.from_numpy(current_output), VIS_N_FFT, VIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_PREVIEW).detach().clone().cpu().numpy()
+        plt.specgram(current_output, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
         plt.colorbar(format='%+2.0f dB')
         plt.tight_layout()
         canvas = agg.FigureCanvasAgg(out_spec_fig)
@@ -137,7 +137,7 @@ def plot_metrics(i, save_to_disk=False):
         plt.title('Example Spectrogram')
         #spec_example = librosa.feature.melspectrogram(current_example, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
         #librosa.display.specshow(librosa.power_to_db(spec_example, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
-        plt.specgram(current_example, VIS_N_FFT, mode='psd', cmap='magma')
+        plt.specgram(current_example, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
         plt.colorbar(format='%+2.0f dB')
         plt.tight_layout()
         canvas = agg.FigureCanvasAgg(example_spec_fig)
@@ -155,7 +155,7 @@ def plot_metrics(i, save_to_disk=False):
         ta_surface.blit(surf_example_spec, (VIS_WIDTH//2, VIS_HEIGHT//2))
         pygame.display.flip()
 
-        yield
+        #yield
 
 def open_truncate_pad(name):
     ret = []
@@ -184,7 +184,7 @@ def iterate_and_resample(files, srs):
         #a = librosa.resample(fortfil, srs[i].item(), SAMPLE_RATE)
         a = torchaudio.transforms.Resample(srs[i].item(), SAMPLE_RATE).forward(fil.detach().clone())
         # = torch.from_numpy(a).requires_grad_(True)
-        arr.append(a[:TOTAL_SAMPLES_OUT])
+        arr.append(a[:TOTAL_SAMPLES_OUT].float())
     return arr
 
 
@@ -246,9 +246,6 @@ class OneStep():
             noise = generate_input_noise().cuda()
         self.generator.eval()
         predicted_logits = self.generator(noise.detach().clone())
-        if GEN_MODE == 4 and DIS_MODE == 2:
-            predicted_logits = librosa.feature.inverse.mel_to_audio(predicted_logits.detach().cpu().numpy(), sr=SAMPLE_RATE, n_fft=VIS_N_FFT, hop_length=VIS_HOP_LEN)
-            predicted_logits = torch.from_numpy(predicted_logits)
         self.generator.train()
         return torch.squeeze(predicted_logits)
 
@@ -263,6 +260,10 @@ def create_input():
 def generate_input_noise():
     if GEN_MODE in [5]:
         return torch.randn(1, TOTAL_SAMPLES_IN, 1, requires_grad=True).cuda()
+    elif GEN_MODE in [2]:
+        return torch.randn(BATCH_SIZE, 2, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
+    elif GEN_MODE in [4]:
+        return torch.randn(BATCH_SIZE, N_GEN_MEL_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
     else:
         return torch.randn(BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
     
@@ -327,7 +328,10 @@ def run_models(window, real):
         noise = generate_input_noise()
         fake1 = gen(noise)
     
-    y = dis(fake1.detach(), True).view(-1)
+    if GEN_MODE == 4:
+        y = dis(fake1.detach(), True).view(-1)
+    else:
+        y = dis(fake1.detach(), False).view(-1)
     fake_verdict = y.flatten().squeeze().mean()
     if torch.isnan(fake_verdict):
         raise RuntimeError("Discriminator output NaN!")
@@ -339,7 +343,10 @@ def run_models(window, real):
     dis_optim.step()
 
     gen.zero_grad()
-    y = dis(fake1, True).view(-1)
+    if GEN_MODE == 4:
+        y = dis(fake1, True).view(-1)
+    else:
+        y = dis(fake1, False).view(-1)
     
     label = label.fill_(REAL_LABEL)
     #label = torch.full(y3.shape, REAL_LABEL).to(torch.float).cuda()
@@ -385,13 +392,16 @@ def train_on_random(window, epoch, dirname):
             if current_view_mode == 1:
                 current_output = fake.detach().clone().cpu().numpy()
             elif current_view_mode == 2:
-                current_output = onestep.generate_one_step(training_noise).cpu().numpy()
+                current_output = onestep.generate_one_step(training_noise).detach().clone().cpu().numpy()
             current_example = normalize_audio(real.detach().clone()).cpu().numpy()
         total_gen_losses.append(gen_loss.item())
         total_dis_losses.append(dis_loss.item())
 
-        window.addstr(8,0, "|] Gen Loss:\t\t"+ str(round(float(gen_loss), 4)))
-        window.addstr(9,0, "|] Dis Loss:\t\t"+ str(round(float(dis_loss), 4)))
+        try:
+            window.addstr(8,0, "|] Gen Loss:\t\t"+ str(round(float(gen_loss), 4)))
+            window.addstr(9,0, "|] Dis Loss:\t\t"+ str(round(float(dis_loss), 4)))
+        except curses.error:
+            pass
 
         time_diff = time.time() - begin_time
         #window.move(10,0)
@@ -420,12 +430,13 @@ def generate_progress_report(window, epoch, dirname, num_times_saved, force=Fals
         os.mkdir(dirname)
     begin_time = time.time()
     if (save_plots and not vis_paused) or force:
-        next(plot_metrics(epoch, save_to_disk=True))
+        plot_metrics(epoch, save_to_disk=True)
     if GEN_MODE in [5]:
         params = onestep.generate_one_step(training_noise)
         out1 = get_output_from_params(params, window)
     else:
-        out1 = onestep.generate_one_step(training_noise)
+        melspec = onestep.generate_one_step(training_noise)
+        out1 = InverseMelWithGradients.apply(melspec, VIS_N_FFT, VIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING).cpu().numpy()
     
     write_normalized_audio_to_disk(out1, dirname+'/progress'+str(epoch)+"_"+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav')
     time_last_saved = time.time()
@@ -437,7 +448,7 @@ def generate_progress_report(window, epoch, dirname, num_times_saved, force=Fals
         window.refresh()
     except curses.error:
         pass
-    yield time_last_saved
+    return time_last_saved
 
 def train_until_interrupt(window, starting_epoch, save_plots=False):
     states = None
@@ -514,7 +525,7 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                                 window.refresh()
                             except curses.error:
                                 pass
-                            next(generate_progress_report(window, epoch, dirname, num_times_saved, force=True))
+                            generate_progress_report(window, epoch, dirname, num_times_saved, force=True)
                             try:
                                 window.move(11,40)
                                 window.clrtoeol()
@@ -533,6 +544,7 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                             elif current_view_mode == 2:
                                 current_view_mode = 1
                 ta_clk.tick(144)
+                pygame.display.flip()
             except:
                 pass
 
@@ -561,7 +573,7 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                     pass
             avg_iters_per_sec = epoch / time_passed
             if save_plots and epoch % VIS_UPDATE_INTERVAL == 0 and not vis_paused:
-                next(plot_metrics(epoch, save_to_disk=False))
+                plot_metrics(epoch, save_to_disk=False)
             if SAVE_EVERY_SECONDS > 0 and avg_iters_per_sec > 0 and epoch / avg_iters_per_sec % float(SAVE_EVERY_SECONDS) < 1.0 / avg_iters_per_sec:
                 generate_progress_report(window, epoch, dirname, num_times_saved, force=True)
                 time_since_last_save = -1
@@ -633,6 +645,7 @@ if __name__ == "__main__":
         gen_optim.load_state_dict(checkpoint['gen_optim_state'])
         dis_optim.load_state_dict(checkpoint['dis_optim_state'])
         epoch = checkpoint['epoch']
+        load_helpers()
         print("!!!Loaded model states from disk!!!")
         print("Starting at epoch", epoch)
     except:
@@ -642,6 +655,14 @@ if __name__ == "__main__":
         print("!!!Initialized models from scratch!!!")
 
     onestep = OneStep(gen)
+
+    """
+    print("Creating test audio...")
+    melspec = MelWithGradients.apply(EXAMPLE_RESULTS[4].float(), VIS_N_FFT, N_GEN_MEL_CHANNELS, VIS_HOP_LEN)
+    audio = InverseMelWithGradients.apply(melspec.clone(), VIS_N_FFT, VIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_PREVIEW).flatten()
+    write_normalized_audio_to_disk(EXAMPLE_RESULTS[4].float(), './test1.wav')
+    write_normalized_audio_to_disk(audio, "./test2.wav")
+    """
     
     print("Initializing Visualizer...")
     pygame.init()
@@ -661,19 +682,25 @@ if __name__ == "__main__":
 
     i = curses.wrapper(train_until_interrupt, epoch, True)
     print("Generating...")
+    start_time = time.time()
     with torch.no_grad():
         if GEN_MODE in [5]:
             params = onestep.generate_one_step()
             data = get_output_from_params(params, None)
         else:
             data = onestep.generate_one_step()
-    print("Done!")
+            if GEN_MODE == 4 and DIS_MODE == 2:
+                data = InverseMelWithGradients.apply(data, VIS_N_FFT, VIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING)
+    end_time = round(time.time() - start_time, 2)
+    print("Generated output in", end_time, "sec.")
     if G_csi:
         G_csi.stop()
 
     write_normalized_audio_to_disk(data, 'out1.wav')
 
     plot_metrics(i, save_to_disk=True)
+
+    print("Done!")
 
     pygame.quit()
 
