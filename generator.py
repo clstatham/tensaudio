@@ -242,11 +242,13 @@ class TAGenerator(nn.Module):
             self.n_sets += 1
             #n = int(self.n_channels * s_us**(2*self.i))
             #c = int(self.n_channels * s_us**(2*self.i+1))
+            k_us = GEN_KERNEL_SIZE_UPSCALING * self.n_sets + 5
+            k_ds = GEN_KERNEL_SIZE_DOWNSCALING * self.n_sets + 3
             n = self.n_channels
             c = self.n_channels
             v_cprint("="*80)
 
-            self.conv_layers.append(nn.ReLU().cuda())
+            self.conv_layers.append(nn.ReLU(True).cuda())
             v_cprint("Created Activation layer.")
             
             #if mode == 'rnnaudio':
@@ -256,24 +258,24 @@ class TAGenerator(nn.Module):
             
             if mode == 'specgram':
                 samps_post_us = (s_us**2) * samps_post_ds
-                self.conv_layers.append(us(c, n, (k_us, k_us), (s_us, s_us)).cuda())
+                self.conv_layers.append(us(c, n, (k_us, k_us), (s_us, s_us), bias=False).cuda())
             else:
                 samps_post_us = s_us * samps_post_ds
-                self.conv_layers.append(us(c, n, k_us, s_us).cuda())
+                self.conv_layers.append(us(c, n, k_us, s_us, bias=False).cuda())
             v_cprint("Created Upscaling layer.", samps_post_ds, "<", samps_post_us)
             
             
-            self.conv_layers.append(nn.ReLU().cuda())
+            self.conv_layers.append(nn.ReLU(True).cuda())
             v_cprint("Created Activation layer.")
             self.conv_layers.append(bn(n).cuda())
             v_cprint("Created Normalization layer with", n, "channels.")
             
             if mode == 'specgram':
                 samps_post_ds = samps_post_us // (s_ds**2)
-                self.conv_layers.append(ds(n, c, (k_ds, k_ds), (s_ds, s_ds)).cuda())
+                self.conv_layers.append(ds(n, c, (k_ds, k_ds), (s_ds, s_ds), bias=False).cuda())
             else:
                 samps_post_ds = samps_post_us // s_ds
-                self.conv_layers.append(ds(n, c, k_ds, s_ds).cuda())
+                self.conv_layers.append(ds(n, c, k_ds, s_ds, bias=False).cuda())
             v_cprint("Created Downscaling layer.", samps_post_us, ">", samps_post_ds)
             
             self.conv_layers.append(bn(c).cuda())
@@ -339,7 +341,7 @@ class TAGenerator(nn.Module):
         
         vv_cprint("|}} Initial layers done.")
         vv_cprint("|}} data.shape:", post_usds.shape)
-        for j in range(self.n_sets*self.n_layers_per_set):
+        for j in range(len(self.conv_layers)):
             #dim = int(np.sqrt(pre_conv.shape[-2]))
             pre_usds = post_usds.view(BATCH_SIZE, self.n_channels, -1)
             if mode == 'specgram':
@@ -351,9 +353,6 @@ class TAGenerator(nn.Module):
                 #post_us = F.interpolate(pre_us, scale_factor=GEN_SCALE_UPSCALING, mode='linear')
             
             post_usds = self.conv_layers[j](post_us)
-            #print(post_usds.shape[-1])
-            #print(self.lin_layers[j].in_features)
-            #post_usds = self.lin_layers[j](post_conv.clone())
             
             
         #post_process = self.conv_layers(pre_conv.clone())

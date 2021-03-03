@@ -12,7 +12,7 @@ MODEL_DIR = "D:\\tensaudio_models\\"
 VIS_WIDTH = 1600
 VIS_HEIGHT = 900
 
-VIS_UPDATE_INTERVAL = 10 # iterations
+VIS_UPDATE_INTERVAL = 2 # iterations
 
 VIS_N_FFT = 2048
 VIS_HOP_LEN = VIS_N_FFT // 4
@@ -25,7 +25,7 @@ SLEEP_TIME = 0
 MAX_ITERS_PER_SEC = 0
 
 # set to 0 to disable periodically generating progress updates
-SAVE_EVERY_SECONDS = 0
+SAVE_EVERY_SECONDS = 60
 # set to 0 to disable periodically saving model
 SAVE_MODEL_EVERY_ITERS = 1000
 
@@ -37,7 +37,7 @@ GRIFFIN_LIM_MAX_ITERS_SAVING = 0
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
 # an error!
-GEN_MODE = 6            # 0 = RNNConv/Hilbert mode
+GEN_MODE = 3            # 0 = RNNConv/Hilbert mode
                         # 1 = RNNConv/Audio mode
                         # 2 = Conv/Hilbert mode
                         # 3 = Conv/Audio mode
@@ -46,17 +46,17 @@ GEN_MODE = 6            # 0 = RNNConv/Hilbert mode
                         # 6 = Conv/"Specgram" mode (A specgram is a tensor of log magnitudes and instantaneous frequencies with format [2, bin(time), freq])
                         # 10 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
-SAMPLE_RATE = 22050
+SAMPLE_RATE = 44100
 GEN_SAMPLE_RATE_FACTOR = 1
 SUBTYPE = 'PCM_16'
-INPUT_DURATION = 2**4 / SAMPLE_RATE
+INPUT_DURATION = 69 / SAMPLE_RATE
 OUTPUT_DURATION = 2**17 / SAMPLE_RATE # power of 2 samples
 
 GEN_SCALE_LIN = 8          # higher = more memory, must be 1 or greater
-GEN_KERNEL_SIZE_UPSCALING = 128
-GEN_STRIDE_UPSCALING = 8      # higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
-GEN_KERNEL_SIZE_DOWNSCALING = 128    # higher = more memory, supposedly odd numbers work better
-GEN_STRIDE_DOWNSCALING = 4        # higher = more memory
+GEN_KERNEL_SIZE_UPSCALING = 13    # higher = more memory, supposedly odd numbers work better
+GEN_STRIDE_UPSCALING = 4      # higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
+GEN_KERNEL_SIZE_DOWNSCALING = 9   # higher = more memory, supposedly odd numbers work better
+GEN_STRIDE_DOWNSCALING = 2
 MIN_N_GEN_LAYERS = 1
 
 # Non-Mel mode only
@@ -79,10 +79,10 @@ PARAM_UPDATE_SAMPLES = SAMPLE_RATE*OUTPUT_DURATION
 TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
 
 # Non-CSound mode only
-BATCH_SIZE = 1 # also a power of 2, lower = more efficient but lower quality, must be 2 or greater
+BATCH_SIZE = 1 # also a power of 2, lower = more efficient but lower quality (currenlt broken, leave at 1)
 
 # Hyperparameters
-GENERATOR_LR = 0.0001
+GENERATOR_LR = 0.001
 GENERATOR_BETA = 0.9
 #GENERATOR_MOMENTUM = 0.02
 
@@ -97,9 +97,9 @@ DIS_MODE = 2            # 0 = Direct mode
                         # 3 = Hilbert mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
-N_DIS_LAYERS = 2
-DIS_STRIDE = 1
-DIS_KERNEL_SIZE = 2
+N_DIS_LAYERS = 4
+DIS_STRIDE = 5
+DIS_KERNEL_SIZE = 12
 DIS_N_FFT = N_GEN_FFT
 #DIS_HOP_LEN = 64
 DIS_N_MELS = N_GEN_MEL_CHANNELS
@@ -107,7 +107,7 @@ DIS_HOP_LEN = GEN_HOP_LEN
 #DIS_FFT_VAL = N_GEN_FFT
 
 # Hyperparameters
-DISCRIMINATOR_LR = 0.0001
+DISCRIMINATOR_LR = 0.001
 DISCRIMINATOR_BETA = 0.9
 #DISCRIMINATOR_MOMENTUM = 0.2
 
