@@ -92,14 +92,17 @@ def plot_metrics(i, save_to_disk=False):
     if type(total_dis_losses) is torch.Tensor:
         total_dis_losses = total_dis_losses.clone().detach().cpu().numpy()
     if len(total_gen_losses) + len(total_dis_losses) + len(total_real_verdicts) + len(total_fake_verdicts) > 0:
-        fig3, (ax1, ax2, ax3) = plt.subplots(3,1, figsize=[VIS_WIDTH//100,VIS_HEIGHT//50], dpi=50)
-        fig3.subplots_adjust(hspace=0.5)
+        fig3, (ax1, ax2, ax3) = plt.subplots(3,1, figsize=[VIS_WIDTH//100,VIS_HEIGHT//50], dpi=50, facecolor="white")
+        fig3.subplots_adjust(hspace=0.1, wspace=0.1, left=0.05, bottom=0.05, right=0.95, top=0.95)
         plt.title("Gen/Dis Losses " + timestamp)
         ax1.set_title("Gen Losses")
+        ax1.set_facecolor("black")
         ax1.plot(range(len(total_gen_losses)), total_gen_losses, color="b")
         ax2.set_title("Dis Losses")
+        ax2.set_facecolor("black")
         ax2.plot(range(len(total_dis_losses)), total_dis_losses, color="r")
         ax3.set_title("Real/Fake Verdicts")
+        ax3.set_facecolor("black")
         ax3.plot(range(len(total_real_verdicts)), total_real_verdicts, label="Real", color="g")
         ax3.plot(range(len(total_fake_verdicts)), total_fake_verdicts, label="Fake", color="m")
         ax3.legend()
@@ -113,46 +116,73 @@ def plot_metrics(i, save_to_disk=False):
         size_plots = canvas.get_width_height()
         plt.close()
 
-        out_spec_fig = plt.figure(figsize=[VIS_WIDTH//100, VIS_HEIGHT//100], dpi=50)
-        if current_view_mode == 1:
-            plt.title('Output Spectrogram')
-        elif current_view_mode == 2:
-            plt.title('Progress Spectrogram')
+        surf_plots = pygame.image.fromstring(plots_img, size_plots, "RGB")
+        ta_surface.blit(surf_plots, (0,0))
         #spec_out = librosa.feature.melspectrogram(current_output, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
         #librosa.display.specshow(librosa.power_to_db(spec_out, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
-        if GEN_MODE == 4 and DIS_MODE == 2:
-            global current_output
-            current_output = InverseMelWithGradients.apply(torch.from_numpy(current_output), VIS_N_FFT, VIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_PREVIEW).detach().clone().cpu().numpy()
-        plt.specgram(current_output, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
-        plt.colorbar(format='%+2.0f dB')
-        plt.tight_layout()
-        canvas = agg.FigureCanvasAgg(out_spec_fig)
-        canvas.draw()
-        renderer = canvas.get_renderer()
-        out_spec_img = renderer.tostring_rgb()
-        size_out_spec = canvas.get_width_height()
-        plt.close()
+        if not save_to_disk:
+            #out_spec_fig = plt.figure(figsize=[VIS_WIDTH//100, VIS_HEIGHT//50], dpi=50)
+            out_spec_fig, ((spec_ax1, spec_ax2), (spec_ax3, spec_ax4)) = plt.subplots(2, 2, figsize=[VIS_WIDTH//100, VIS_HEIGHT//50], dpi=50, facecolor="white")
+            out_spec_fig.subplots_adjust(hspace=0.1, wspace=0.1, left=0.05, bottom=0.05, right=0.95, top=0.95)
 
-        example_spec_fig = plt.figure(figsize=[VIS_WIDTH//100, VIS_HEIGHT//100], dpi=50)
-        plt.title('Example Spectrogram')
-        #spec_example = librosa.feature.melspectrogram(current_example, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
-        #librosa.display.specshow(librosa.power_to_db(spec_example, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
-        plt.specgram(current_example, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
-        plt.colorbar(format='%+2.0f dB')
-        plt.tight_layout()
-        canvas = agg.FigureCanvasAgg(example_spec_fig)
-        canvas.draw()
-        renderer = canvas.get_renderer()
-        example_spec_img = renderer.tostring_rgb()
-        size_example_spec = canvas.get_width_height()
-        plt.close()
+            if current_view_mode == 1:
+                spec_ax1.set_title('Output Rainbowgram')
+                spec_ax3.set_title('Output Mel Spectrogram')
+            else:
+                spec_ax1.set_title('Progress Rainbowgram')
+                spec_ax3.set_title('Progress Mel Spectrogram')
+            if GEN_MODE == 4 and DIS_MODE == 2:
+                global current_output
+                current_output = MelToSTFTWithGradients.apply(torch.from_numpy(current_output), VIS_N_FFT)
+                current_output = stft_to_audio(current_output, GEN_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING).detach().clone().cpu().numpy()
+            
+            spec_ax2.set_title('Example Rainbowgram')
+            spec_ax4.set_title('Example Mel Spectrogram')
+            
+            note_specgram(current_output, spec_ax1, VIS_HOP_LEN)
+            note_specgram(current_example, spec_ax2, VIS_HOP_LEN)
+            spec_ax3.specgram(current_output, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
+            spec_ax4.specgram(current_example, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
+            canvas = agg.FigureCanvasAgg(out_spec_fig)
+            canvas.draw()
+            renderer = canvas.get_renderer()
+            out_spec_img = renderer.tostring_rgb()
+            size_out_spec_img = canvas.get_width_height()
+            plt.close()
+            out_spec_surf = pygame.image.fromstring(out_spec_img, size_out_spec_img, "RGB")
+            ta_surface.blit(out_spec_surf, (VIS_WIDTH//2, 0))
+            """
+            plt.specgram(current_output, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
+            plt.colorbar(format='%+2.0f dB')
+            plt.tight_layout()
+            canvas = agg.FigureCanvasAgg(out_spec_fig)
+            canvas.draw()
+            renderer = canvas.get_renderer()
+            out_spec_img = renderer.tostring_rgb()
+            size_out_spec = canvas.get_width_height()
+            plt.close()
 
-        surf_plots = pygame.image.fromstring(plots_img, size_plots, "RGB")
-        surf_out_spec = pygame.image.fromstring(out_spec_img, size_out_spec, "RGB")
-        surf_example_spec = pygame.image.fromstring(example_spec_img, size_example_spec, "RGB")
-        ta_surface.blit(surf_plots, (0,0))
-        ta_surface.blit(surf_out_spec, (VIS_WIDTH//2, 0))
-        ta_surface.blit(surf_example_spec, (VIS_WIDTH//2, VIS_HEIGHT//2))
+            example_spec_fig = plt.figure(figsize=[VIS_WIDTH//100, VIS_HEIGHT//100], dpi=50)
+            plt.title('Example Spectrogram')
+            #spec_example = librosa.feature.melspectrogram(current_example, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
+            #librosa.display.specshow(librosa.power_to_db(spec_example, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
+            plt.specgram(current_example, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
+            plt.colorbar(format='%+2.0f dB')
+            plt.tight_layout()
+            canvas = agg.FigureCanvasAgg(example_spec_fig)
+            canvas.draw()
+            renderer = canvas.get_renderer()
+            example_spec_img = renderer.tostring_rgb()
+            size_example_spec = canvas.get_width_height()
+            plt.close()
+
+            
+            surf_out_spec = pygame.image.fromstring(out_spec_img, size_out_spec, "RGB")
+            surf_example_spec = pygame.image.fromstring(example_spec_img, size_example_spec, "RGB")
+            ta_surface.blit(surf_out_spec, (VIS_WIDTH//2, 0))
+            ta_surface.blit(surf_example_spec, (VIS_WIDTH//2, VIS_HEIGHT//2))
+            """
+        
         pygame.display.flip()
 
         #yield
@@ -264,6 +294,8 @@ def generate_input_noise():
         return torch.randn(BATCH_SIZE, 2, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
     elif GEN_MODE in [4]:
         return torch.randn(BATCH_SIZE, N_GEN_MEL_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
+    elif GEN_MODE in [6]:
+        return torch.randn(BATCH_SIZE, 2, TOTAL_SAMPLES_IN, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
     else:
         return torch.randn(BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
     
@@ -335,7 +367,7 @@ def run_models(window, real):
     fake_verdict = y.flatten().squeeze().mean()
     if torch.isnan(fake_verdict):
         raise RuntimeError("Discriminator output NaN!")
-    label = label.fill_(FAKE_LABEL)
+    label = torch.full(y.shape, FAKE_LABEL).to(torch.float).cuda()
     dis_loss_fake = dis.criterion(label, y)
     dis_loss_fake.backward()
     dis_loss = dis_loss_real + dis_loss_fake
@@ -348,7 +380,7 @@ def run_models(window, real):
     else:
         y = dis(fake1, False).view(-1)
     
-    label = label.fill_(REAL_LABEL)
+    label = torch.full(y.shape, REAL_LABEL).to(torch.float).cuda()
     #label = torch.full(y3.shape, REAL_LABEL).to(torch.float).cuda()
     gen_loss = gen.criterion(label, y)
     gen_loss.backward()
@@ -436,7 +468,8 @@ def generate_progress_report(window, epoch, dirname, num_times_saved, force=Fals
         out1 = get_output_from_params(params, window)
     else:
         melspec = onestep.generate_one_step(training_noise)
-        out1 = InverseMelWithGradients.apply(melspec, VIS_N_FFT, VIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING).cpu().numpy()
+        stft = MelToSTFTWithGradients.apply(melspec[:,:], VIS_N_FFT)
+        out1 = stft_to_audio(stft, VIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING).cpu().numpy()
     
     write_normalized_audio_to_disk(out1, dirname+'/progress'+str(epoch)+"_"+str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))+'.wav')
     time_last_saved = time.time()
@@ -525,7 +558,14 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                                 window.refresh()
                             except curses.error:
                                 pass
-                            generate_progress_report(window, epoch, dirname, num_times_saved, force=True)
+                            #generate_progress_report(window, epoch, dirname, num_times_saved, force=True)
+                            out1 = onestep.generate_one_step(generate_input_noise())
+                            dirname1 = TRAINING_DIR+'/'+datetime.now().strftime("%d.%m.%Y")
+                            try:
+                                os.mkdir(dirname1)
+                            except Exception as e:
+                                pass
+                            write_normalized_audio_to_disk(out1, dirname1+'/progress'+str(datetime.now().strftime("%H.%M.%S"))+'_'+str(epoch)+'.wav')
                             try:
                                 window.move(11,40)
                                 window.clrtoeol()
@@ -655,15 +695,25 @@ if __name__ == "__main__":
         print("!!!Initialized models from scratch!!!")
 
     onestep = OneStep(gen)
-
     """
     print("Creating test audio...")
-    melspec = MelWithGradients.apply(EXAMPLE_RESULTS[4].float(), VIS_N_FFT, N_GEN_MEL_CHANNELS, VIS_HOP_LEN)
-    audio = InverseMelWithGradients.apply(melspec.clone(), VIS_N_FFT, VIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_PREVIEW).flatten()
+    melspec = AudioToMelWithGradients.apply(EXAMPLE_RESULTS[4].float(), N_GEN_FFT, N_GEN_MEL_CHANNELS, GEN_HOP_LEN)
+    print(melspec.shape)
+    stft = MelToSTFTWithGradients.apply(melspec.clone(), N_GEN_FFT)
+    audio = stft_to_audio(stft, GEN_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING)
+    print(audio.shape)
     write_normalized_audio_to_disk(EXAMPLE_RESULTS[4].float(), './test1.wav')
     write_normalized_audio_to_disk(audio, "./test2.wav")
     """
-    
+    # fig, ax = plt.subplots()
+    # img = librosa.display.specshow(melspec.cpu().numpy(), ax=ax, sr=SAMPLE_RATE, hop_length=VIS_HOP_LEN)
+    # fig.colorbar(img, ax=ax)
+    # plt.show()
+
+    # plt.figure()
+    # librosa.display.waveplot(audio.cpu().numpy(), sr=SAMPLE_RATE)
+    # plt.show()
+
     print("Initializing Visualizer...")
     pygame.init()
     ta_surface = pygame.display.set_mode((VIS_WIDTH, VIS_HEIGHT))
@@ -676,9 +726,9 @@ if __name__ == "__main__":
             raise RuntimeError("CSound compilation failed!")
         current_params = [0.]*N_PARAMS*TOTAL_PARAM_UPDATES
 
-    print_global_constants()
+    #print_global_constants()
     print("Initialization complete! Starting...")
-    time.sleep(3)
+    time.sleep(5)
 
     i = curses.wrapper(train_until_interrupt, epoch, True)
     print("Generating...")
@@ -690,7 +740,8 @@ if __name__ == "__main__":
         else:
             data = onestep.generate_one_step()
             if GEN_MODE == 4 and DIS_MODE == 2:
-                data = InverseMelWithGradients.apply(data, VIS_N_FFT, VIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING)
+                data = MelToSTFTWithGradients.apply(data[:,:], N_GEN_FFT)
+                data = stft_to_audio(data, GEN_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING)
     end_time = round(time.time() - start_time, 2)
     print("Generated output in", end_time, "sec.")
     if G_csi:
@@ -699,6 +750,9 @@ if __name__ == "__main__":
     write_normalized_audio_to_disk(data, 'out1.wav')
 
     plot_metrics(i, save_to_disk=True)
+
+    print("Saving models...")
+    save_states(i)
 
     print("Done!")
 

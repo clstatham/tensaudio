@@ -1,20 +1,21 @@
-RESOURCES_DIR = "D:\\tensaudio_resources"
+RESOURCES_DIR = "D:\\tensaudio_resources\\"
 EXAMPLES_DIR = "fire"
 EXAMPLE_RESULTS_DIR = "synthloops"
 INPUTS_DIR = "inputs_kicks"
 
-PLOTS_DIR = "D:\\tensaudio_plots"
-TRAINING_DIR = "D:\\tensaudio_training"
+PLOTS_DIR = "D:\\tensaudio_plots\\"
+TRAINING_DIR = "D:\\tensaudio_training\\"
 
-MODEL_DIR = "D:\\tensaudio_models"
+MODEL_DIR = "D:\\tensaudio_models\\"
 
 # must be divisible by 100
-VIS_WIDTH = 1200
-VIS_HEIGHT = 700
-VIS_UPDATE_INTERVAL = 25 # iterations
+VIS_WIDTH = 1600
+VIS_HEIGHT = 900
 
-VIS_N_FFT = 512
-VIS_HOP_LEN = 1
+VIS_UPDATE_INTERVAL = 10 # iterations
+
+VIS_N_FFT = 2048
+VIS_HOP_LEN = VIS_N_FFT // 4
 
 # set to 0 to run until visualizer is closed
 MAX_ITERS = 0
@@ -26,55 +27,63 @@ MAX_ITERS_PER_SEC = 0
 # set to 0 to disable periodically generating progress updates
 SAVE_EVERY_SECONDS = 0
 # set to 0 to disable periodically saving model
-SAVE_MODEL_EVERY_ITERS = 10000
+SAVE_MODEL_EVERY_ITERS = 1000
 
 VERBOSITY_LEVEL = 1 # 0, 1, 2
 
-GRIFFIN_LIM_MAX_ITERS_PREVIEW = 1
-GRIFFIN_LIM_MAX_ITERS_SAVING = 16
+GRIFFIN_LIM_MAX_ITERS_PREVIEW = 0
+GRIFFIN_LIM_MAX_ITERS_SAVING = 0
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
 # an error!
-GEN_MODE = 4            # 0 = RNN/Hilbert mode
-                        # 1 = RNN/Audio mode
+GEN_MODE = 6            # 0 = RNNConv/Hilbert mode
+                        # 1 = RNNConv/Audio mode
                         # 2 = Conv/Hilbert mode
                         # 3 = Conv/Audio mode
                         # 4 = Conv/Mel mode
                         # 5 = Conv/STFT mode
+                        # 6 = Conv/"Specgram" mode (A specgram is a tensor of log magnitudes and instantaneous frequencies with format [2, bin(time), freq])
                         # 10 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
 SAMPLE_RATE = 22050
 GEN_SAMPLE_RATE_FACTOR = 1
 SUBTYPE = 'PCM_16'
-INPUT_DURATION = 32 / SAMPLE_RATE
-OUTPUT_DURATION = 2**16 / SAMPLE_RATE # power of 2 samples
-GEN_KERNEL_SIZE = 1    # higher = more memory
-GEN_STRIDE1 = 2         # higher = more memory
-#GEN_STRIDE2 = 1         # higher = more memory
-#GEN_SCALE1 = 3          # higher = more memory, must be 2 or greater
-GEN_SCALE = 2        # higher = more memory, must be 2 or greater
+INPUT_DURATION = 2**4 / SAMPLE_RATE
+OUTPUT_DURATION = 2**17 / SAMPLE_RATE # power of 2 samples
+
+GEN_SCALE_LIN = 8          # higher = more memory, must be 1 or greater
+GEN_KERNEL_SIZE_UPSCALING = 128
+GEN_STRIDE_UPSCALING = 8      # higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
+GEN_KERNEL_SIZE_DOWNSCALING = 128    # higher = more memory, supposedly odd numbers work better
+GEN_STRIDE_DOWNSCALING = 4        # higher = more memory
 MIN_N_GEN_LAYERS = 1
+
 # Non-Mel mode only
-N_CHANNELS = 4
+N_CHANNELS = 1
+
 # Mel mode only
 N_GEN_MEL_CHANNELS = 128
+
 # Hilbert, STFT, and Mel mode only
 N_GEN_FFT = VIS_N_FFT
 GEN_HOP_LEN = VIS_HOP_LEN
+
 # RNN mode only
 N_RNN_LAYERS = 4
+
 # CSound mode only
 N_PARAMS = 64
 KONTROL_SAMPLES = 64
 PARAM_UPDATE_SAMPLES = SAMPLE_RATE*OUTPUT_DURATION
 TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
+
 # Non-CSound mode only
-BATCH_SIZE = 1 # also a power of 2, lower = more efficient but lower quality
+BATCH_SIZE = 1 # also a power of 2, lower = more efficient but lower quality, must be 2 or greater
 
 # Hyperparameters
 GENERATOR_LR = 0.0001
-GENERATOR_BETA = 0.5
+GENERATOR_BETA = 0.9
 #GENERATOR_MOMENTUM = 0.02
 
 # If you change ANY of the following values, you MUST empty
@@ -89,8 +98,8 @@ DIS_MODE = 2            # 0 = Direct mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
 N_DIS_LAYERS = 2
-DIS_STRIDE = 16
-DIS_KERNEL_SIZE = 1
+DIS_STRIDE = 1
+DIS_KERNEL_SIZE = 2
 DIS_N_FFT = N_GEN_FFT
 #DIS_HOP_LEN = 64
 DIS_N_MELS = N_GEN_MEL_CHANNELS
@@ -99,7 +108,7 @@ DIS_HOP_LEN = GEN_HOP_LEN
 
 # Hyperparameters
 DISCRIMINATOR_LR = 0.0001
-DISCRIMINATOR_BETA = 0.5
+DISCRIMINATOR_BETA = 0.9
 #DISCRIMINATOR_MOMENTUM = 0.2
 
 
@@ -119,7 +128,7 @@ TOTAL_SAMPLES_OUT = int(SAMPLE_RATE * OUTPUT_DURATION)
 N_BATCHES = int(TOTAL_SAMPLES_OUT // BATCH_SIZE)
 if TOTAL_SAMPLES_OUT % BATCH_SIZE != 0:
     raise ValueError("Could not calculate N_BATCHES: Total length of audio not divisible by", (BATCH_SIZE))
-N_TIMESTEPS_PER_KERNEL = int(SAMPLE_RATE*OUTPUT_DURATION // (GEN_KERNEL_SIZE * N_BATCHES))
+N_TIMESTEPS_PER_KERNEL = int(SAMPLE_RATE*OUTPUT_DURATION // (GEN_KERNEL_SIZE_DOWNSCALING * N_BATCHES))
 SAMPLES_PER_BATCH = int(TOTAL_SAMPLES_OUT // N_BATCHES)
 if TOTAL_SAMPLES_OUT % N_BATCHES != 0:
     raise ValueError("Could not calculate SAMPLES_PER_BATCH: Total length of audio not divisible by", N_BATCHES)
@@ -146,7 +155,7 @@ def print_global_constants():
     #                 cprint("Will create 1 Post-Dense layer of", n_filts, "filters.")
     #     else:
     #         cprint("Will create 1 Post-Dense layer of", N_UNITS*N_TIMESTEPS//20, "filters.")
-    output_samples = N_BATCHES*N_CHANNELS*N_TIMESTEPS_PER_KERNEL*GEN_KERNEL_SIZE
+    output_samples = N_BATCHES*N_CHANNELS*N_TIMESTEPS_PER_KERNEL*GEN_KERNEL_SIZE_DOWNSCALING
     print("Total # of output samples:", output_samples)
     print("^-"*39 + "^")
 

@@ -14,14 +14,6 @@ def spectral_convolution(in1, in2):
     conv = np.multiply(spec1, spec2)
     return np.real(np.fft.ifft(conv))
 
-def diff_pytorch(phi):
-    return phi - F.pad(phi, (1, 0))[..., :-1]
-
-def inst_freq(p):
-    return np.diff(p) / (2.0*np.pi) * len(p)
-def inst_freq_pytorch(p):
-    return diff_pytorch(p) / (2.0*np.pi) * len(p)
-
 def inverse_hilbert_cos(amplitude_envelope, instantaneous_phase):
     T = len(instantaneous_phase)
 

@@ -36,8 +36,6 @@ class TADiscriminator(nn.Module):
         c = self.ndf * 2
         n = self.ndf
         for _ in range(self.n_layers):
-            
-            
             if DIS_MODE in [0, 1, 3]:
                 c = int(self.ndf * 2**i)
                 n = int(self.ndf * 2**(i-4))
@@ -49,9 +47,9 @@ class TADiscriminator(nn.Module):
                 c = int(self.ndf * 2**i)
                 n = int(self.ndf * 2**(i-1))
                 i -= 1
-                self.net.append(nn.Conv2d(c, n, self.ksz, 1, 0, bias=False).cuda())
+                self.net.append(nn.Conv1d(c, n, self.ksz, 1, 0, bias=False).cuda())
                 if i < self.n_layers:
-                    self.net.append(nn.BatchNorm2d(n).cuda())
+                    self.net.append(nn.BatchNorm1d(n).cuda())
             if i < self.n_layers:
                 self.net.append(nn.LeakyReLU(0.2, inplace=True).cuda())
             
@@ -59,7 +57,7 @@ class TADiscriminator(nn.Module):
         if DIS_MODE in [0, 1, 3]:
             self.net.append(nn.Conv1d(n, 1, 1, 1, 0, bias=False).cuda())
         else:
-            self.net.append(nn.Conv2d(n, 1, 1, 1, 0, bias=False).cuda())
+            self.net.append(nn.Conv1d(n, 1, 1, 1, 0, bias=False).cuda())
         #self.net.append(nn.Softsign().cuda())
         self.net.append(nn.Sigmoid().cuda())
         self.net.append(nn.Flatten().cuda())
@@ -69,7 +67,7 @@ class TADiscriminator(nn.Module):
         self.net = nn.Sequential(*self.net)
     
     def criterion(self, label, output):
-        return self.loss(output.mean().cuda(), label.mean().cuda())
+        return self.loss(output.cuda(), label.cuda())
 
     def forward(self, inp, inp_is_mel=False):
         if DIS_MODE == 0:
@@ -83,10 +81,10 @@ class TADiscriminator(nn.Module):
         elif DIS_MODE == 2:
             # what an ugly line of code
             if inp_is_mel:
-                actual_input = inp.clone().to(torch.float).cuda()
+                actual_input = inp.clone().to(torch.float).cuda().unsqueeze(0)
             else:
-                melspec = MelWithGradients.apply(inp.clone().to(torch.float), DIS_N_FFT, DIS_N_MELS, DIS_HOP_LEN)
-                actual_input = melspec.unsqueeze(0).unsqueeze(-1).cuda()
+                melspec = AudioToMelWithGradients.apply(inp.clone().to(torch.float), DIS_N_FFT, DIS_N_MELS, DIS_HOP_LEN)
+                actual_input = melspec.unsqueeze(0).cuda()
                 # actual_input = ag.Variable(torch.unsqueeze(torch.unsqueeze(torchaudio.transforms.MelSpectrogram(
                 #     SAMPLE_RATE, DIS_N_FFT, n_mels=DIS_N_MELS)(
                 #             inp[:-DIS_N_MELS].to(torch.float).cpu()
