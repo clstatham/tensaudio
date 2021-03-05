@@ -18,7 +18,10 @@ import timer3
 import torch
 import torch.nn as nn
 import torch.autograd as ag
+import torch.distributed as dist
+import torch.multiprocessing as mp
 import torchaudio
+from torch.nn.parallel import DistributedDataParallel as DDP
 from matplotlib import animation, cm
 from pygame.locals import *
 
@@ -120,27 +123,37 @@ def plot_metrics(i, save_to_disk=False):
         #spec_out = librosa.feature.melspectrogram(current_output, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
         #librosa.display.specshow(librosa.power_to_db(spec_out, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
         #out_spec_fig = plt.figure(figsize=[VIS_WIDTH//100, VIS_HEIGHT//50], dpi=50)
-        out_spec_fig, ((spec_ax1, spec_ax2), (spec_ax3, spec_ax4)) = plt.subplots(2, 2, figsize=[VIS_WIDTH//100, VIS_HEIGHT//50], dpi=50, facecolor="white")
+        if current_view_mode == 3:
+            out_spec_fig, spec_ax3 = plt.subplots(1, 1, figsize=[VIS_WIDTH//50, VIS_HEIGHT//50], dpi=50, facecolor="white")
+        else:
+            out_spec_fig, ((spec_ax1, spec_ax2), (spec_ax3, spec_ax4)) = plt.subplots(2, 2, figsize=[VIS_WIDTH//100, VIS_HEIGHT//50], dpi=50, facecolor="white")
         out_spec_fig.subplots_adjust(hspace=0.1, wspace=0.1, left=0.05, bottom=0.05, right=0.95, top=0.95)
 
         if current_view_mode == 1:
             spec_ax1.set_title('Output Rainbowgram')
             spec_ax3.set_title('Output Mel Spectrogram')
-        else:
+        elif current_view_mode == 2:
             spec_ax1.set_title('Progress Rainbowgram')
+            spec_ax3.set_title('Progress Mel Spectrogram')
+        else:
             spec_ax3.set_title('Progress Mel Spectrogram')
         if GEN_MODE == 4 and DIS_MODE == 2:
             global current_output
-            current_output = MelToSTFTWithGradients.apply(torch.from_numpy(current_output), VIS_N_FFT)
+            current_output = MelToSTFTWithGradients.apply(torch.from_numpy(current_output), N_GEN_MEL_CHANNELS)
             current_output = stft_to_audio(current_output, GEN_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING).detach().clone().cpu().numpy()
+        if DIS_MODE == 2:
+            global current_example
+            current_example = MelToSTFTWithGradients.apply(torch.from_numpy(current_example), DIS_N_MELS)
+            current_example = stft_to_audio(current_example, DIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING).detach().clone().cpu().numpy()
+        if current_view_mode != 3:
+            spec_ax2.set_title('Example Rainbowgram')
+            spec_ax4.set_title('Example Mel Spectrogram')
+            note_specgram(current_output, spec_ax1, VIS_HOP_LEN)
+            note_specgram(current_example, spec_ax2, VIS_HOP_LEN)
+            spec_ax4.specgram(current_example, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
         
-        spec_ax2.set_title('Example Rainbowgram')
-        spec_ax4.set_title('Example Mel Spectrogram')
-        
-        note_specgram(current_output, spec_ax1, VIS_HOP_LEN)
-        note_specgram(current_example, spec_ax2, VIS_HOP_LEN)
         spec_ax3.specgram(current_output, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
-        spec_ax4.specgram(current_example, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
+        
         canvas = agg.FigureCanvasAgg(out_spec_fig)
         canvas.draw()
         renderer = canvas.get_renderer()
@@ -148,7 +161,10 @@ def plot_metrics(i, save_to_disk=False):
         size_out_spec_img = canvas.get_width_height()
         plt.close()
         out_spec_surf = pygame.image.fromstring(out_spec_img, size_out_spec_img, "RGB")
-        ta_surface.blit(out_spec_surf, (VIS_WIDTH//2, 0))
+        if current_view_mode == 3:
+            ta_surface.blit(out_spec_surf, (0, 0))
+        else:
+            ta_surface.blit(out_spec_surf, (VIS_WIDTH//2, 0))
         
         pygame.display.flip()
 
@@ -217,23 +233,6 @@ def get_example_result(idx):
 def get_random_example_result():
     return get_example_result(np.random.randint(len(EXAMPLE_RESULTS)))
 
-# a, p = my_hilbert(select_input(0))
-# fig0 = plt.figure()
-# plt.plot(range(len(select_input(0))), select_input(0))
-# plt.show()
-# fig1 = plt.figure()
-# plt.plot(range(len(a)), a, color='red')
-# plt.show()
-# fig2 = plt.figure()
-# plt.plot(range(len(p)), p, color='red')
-# plt.show()
-# y = inverse_hilbert(a, p)
-# fig4 = plt.figure()
-# plt.plot(range(len(y)), y)
-# plt.show()
-# scaled1 = np.int16(y/np.max(np.abs(y)) * 32767)
-# soundfile.write('test.wav', scaled1, SAMPLE_RATE, SUBTYPE)
-
 
 
 class OneStep():
@@ -244,7 +243,7 @@ class OneStep():
     @torch.no_grad()
     def generate_one_step(self, noise=None):
         if noise is None:
-            noise = generate_input_noise().cuda()
+            noise = generate_input_noise().to(0)
         self.generator.eval()
         predicted_logits = self.generator(noise.detach().clone())
         self.generator.train()
@@ -252,23 +251,24 @@ class OneStep():
 
 def create_input():
         #x = get_random_example()
-        y = get_random_example_result()
-
+        y = normalize_audio(torch.as_tensor(get_random_example_result())).to(0)
+        if DIS_MODE == 2:
+            y = AudioToMelWithGradients.apply(y, DIS_N_FFT, DIS_N_MELS, DIS_HOP_LEN)
         #if INPUT_MODE == 'conv':
-        #    y = torch.from_numpy(spectral_convolution(x, y)).cuda()
+        #    y = torch.from_numpy(spectral_convolution(x, y)).to(0)
         return y
 
 def generate_input_noise():
-    if GEN_MODE in [5]:
-        return torch.randn(1, TOTAL_SAMPLES_IN, 1, requires_grad=True).cuda()
+    if GEN_MODE in [10]:
+        return torch.randn(1, TOTAL_SAMPLES_IN, 1, requires_grad=True).to(0)
     elif GEN_MODE in [2]:
-        return torch.randn(BATCH_SIZE, 2, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
+        return torch.randn(BATCH_SIZE, 2, TOTAL_SAMPLES_IN, requires_grad=True).to(0)
     elif GEN_MODE in [4]:
-        return torch.randn(BATCH_SIZE, N_GEN_MEL_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
+        return torch.randn(BATCH_SIZE, 1, N_GEN_MEL_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).to(0)
     elif GEN_MODE in [6]:
-        return torch.randn(BATCH_SIZE, 2, TOTAL_SAMPLES_IN, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
+        return torch.randn(BATCH_SIZE, 2, N_GEN_FFT // 4, TOTAL_SAMPLES_IN, requires_grad=True).to(0)
     else:
-        return torch.randn(BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).cuda()
+        return torch.randn(BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).to(0)
     
 training_noise = ag.Variable(generate_input_noise(), requires_grad=True)
 gen_loss, dis_loss = None, None
@@ -277,7 +277,7 @@ def weights_init(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
         nn.init.normal_(m.weight.data, 0.0, 0.02)
-    elif classname.find('BatchNorm') != -1:
+    elif classname.find('Norm') != -1:
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
 
@@ -315,47 +315,41 @@ def run_models(window, real):
                 return "UNSURE", "UNSURE"
 
     dis.zero_grad()
-
-    y = dis(real, False).view(-1)
-    label = torch.full(y.shape, REAL_LABEL).to(torch.float).cuda()
-    dis_loss_real = dis.criterion(label, y)
-    dis_loss_real.backward()
-    real_verdict = y.flatten().squeeze().mean().item()
+    
+    verdict = dis(real).view(-1)
+    label = torch.full(verdict.shape, REAL_LABEL).to(torch.float).to(0)
+    dis_loss_real = dis.criterion(label, verdict)
+    #dis_loss_real.backward()
+    real_verdict = verdict.flatten().squeeze().mean().item()
 
     if GEN_MODE in [5]:
         noise = generate_input_noise()
         params = gen(noise)
         audio = get_output_from_params(params, window)
-        fake1 = torch.squeeze(audio).float().cuda()
+        fake = torch.squeeze(audio).float().to(0)
     else:
         noise = generate_input_noise()
-        fake1 = gen(noise)
+        fake = gen(noise)
     
-    if GEN_MODE == 4:
-        y = dis(fake1.detach(), True).view(-1)
-    else:
-        y = dis(fake1.detach(), False).view(-1)
-    fake_verdict = y.flatten().squeeze().mean()
+    verdict = dis(fake.detach()).view(-1)
+    fake_verdict = verdict.flatten().squeeze().mean()
     if torch.isnan(fake_verdict):
         raise RuntimeError("Discriminator output NaN!")
-    label = torch.full(y.shape, FAKE_LABEL).to(torch.float).cuda()
-    dis_loss_fake = dis.criterion(label, y)
-    dis_loss_fake.backward()
+    label = torch.full(verdict.shape, FAKE_LABEL).to(torch.float).to(0)
+    dis_loss_fake = dis.criterion(label, verdict)
+    #dis_loss_fake.backward()
     dis_loss = dis_loss_real + dis_loss_fake
-    #dis_loss.backward(retain_graph=True)
+    dis_loss.backward()
     dis_optim.step()
 
     gen.zero_grad()
-    if GEN_MODE == 4:
-        y = dis(fake1, True).view(-1)
-    else:
-        y = dis(fake1, False).view(-1)
+    verdict = dis(fake).view(-1)
     
-    label = torch.full(y.shape, REAL_LABEL).to(torch.float).cuda()
-    #label = torch.full(y3.shape, REAL_LABEL).to(torch.float).cuda()
-    gen_loss = gen.criterion(label, y)
+    label = torch.full(verdict.shape, REAL_LABEL).to(torch.float).to(0)
+    #label = torch.full(y3.shape, REAL_LABEL).to(torch.float).to(0)
+    gen_loss = gen.criterion(label, verdict)
     gen_loss.backward()
-    fake_verdict = y.flatten().squeeze().mean().item()
+    fake_verdict = verdict.flatten().squeeze().mean().item()
     gen_optim.step()
 
     real_str, fake_str = verdict_str(real_verdict, fake_verdict)
@@ -374,7 +368,7 @@ def run_models(window, real):
     total_real_verdicts.append(real_verdict)
     total_fake_verdicts.append(fake_verdict)
 
-    return real, fake1, gen_loss.flatten().squeeze().mean(), dis_loss
+    return real, fake, gen_loss.flatten().squeeze().mean(), dis_loss
 
 def save_states(epoch):
     torch.save({
@@ -388,14 +382,14 @@ def save_states(epoch):
 def train_on_random(window, epoch, dirname):
     global current_output, current_example
     while True:
-        z = torch.autograd.Variable(normalize_audio(torch.as_tensor(create_input())), requires_grad=True).cuda()
+        z = torch.autograd.Variable(create_input(), requires_grad=True).to(0)
         begin_time = time.time()
         real, fake, gen_loss, dis_loss = run_models(window, z)
         if current_view_mode == 1:
-            current_output = normalize_audio(fake.detach().clone().cpu()).numpy()
-        elif current_view_mode == 2:
-            current_output = normalize_audio(onestep.generate_one_step(training_noise).detach().clone().cpu()).numpy()
-        current_example = normalize_audio(real.detach().clone()).cpu().numpy()
+            current_output = fake.detach().clone().cpu().numpy()
+        elif current_view_mode in [2,3]:
+            current_output = onestep.generate_one_step(training_noise).detach().clone().cpu().numpy()
+        current_example = real.detach().clone().cpu().numpy()
         total_gen_losses.append(gen_loss.item())
         total_dis_losses.append(dis_loss.item())
 
@@ -447,8 +441,8 @@ def generate_progress_report(window, epoch, dirname, force=False):
         out1 = get_output_from_params(params, window)
     elif GEN_MODE in [4] and DIS_MODE in [2]:
         melspec = onestep.generate_one_step(training_noise)
-        stft = MelToSTFTWithGradients.apply(melspec[:,:], VIS_N_FFT)
-        out1 = stft_to_audio(stft, VIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING).cpu().numpy()
+        stft = MelToSTFTWithGradients.apply(melspec[:,:], N_GEN_MEL_CHANNELS)
+        out1 = stft_to_audio(stft, VIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING)
     else:
         out1 = onestep.generate_one_step(training_noise)
     
@@ -544,6 +538,8 @@ def train_until_interrupt(window, starting_epoch, save_plots=False):
                             if current_view_mode == 1:
                                 current_view_mode = 2
                             elif current_view_mode == 2:
+                                current_view_mode = 3
+                            elif current_view_mode == 3:
                                 current_view_mode = 1
                         elif ev.key == K_SPACE:
                             plot_metrics(epoch, False)
@@ -631,16 +627,23 @@ if __name__ == "__main__":
     else:
         print("Created", len(EXAMPLE_RESULTS), "Example Result Arrays.")
 
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    dist.init_process_group('gloo', init_method="file:///D:/tensaudio/filestore", world_size=1, rank=0)
+
     print("Creating Generator...")
-    gen = TAGenerator().cuda()
+    gen = TAGenerator().to(0)
+    gen_ddp = DDP(gen)
     print("Creating Discriminator...")
-    dis = TADiscriminator().cuda()
+    dis = TADiscriminator().to(0)
+    dis_ddp = DDP(dis)
     print("Creating Optimizers...")
     #gen_optim = torch.optim.SGD(gen.parameters(), lr=GENERATOR_LR, momentum=GENERATOR_MOMENTUM)
     gen_optim = torch.optim.Adam(gen.parameters(), lr=GENERATOR_LR, betas=(GENERATOR_BETA, 0.999))
     dis_optim = torch.optim.Adam(dis.parameters(), lr=DISCRIMINATOR_LR, betas=(DISCRIMINATOR_BETA, 0.999))
     #dis_optim = torch.optim.RMSprop(dis.parameters(), lr=DISCRIMINATOR_LR, momentum=DISCRIMINATOR_MOMENTUM)
-    #gen = TAInstParamGenerator().cuda()
+    #gen = TAInstParamGenerator().to(0)
     print("Attempting to load states from disk...")
     try:
         checkpoint = torch.load(os.path.join(MODEL_DIR, "checkpoints", "checkpoint.pt"))
@@ -649,7 +652,6 @@ if __name__ == "__main__":
         gen_optim.load_state_dict(checkpoint['gen_optim_state'])
         dis_optim.load_state_dict(checkpoint['dis_optim_state'])
         epoch = checkpoint['epoch']
-        load_helpers()
         print("!!!Loaded model states from disk!!!")
         print("Starting at epoch", epoch)
     except:
@@ -659,16 +661,18 @@ if __name__ == "__main__":
         print("!!!Initialized models from scratch!!!")
 
     onestep = OneStep(gen)
-    """
+    
+    
     print("Creating test audio...")
-    melspec = AudioToMelWithGradients.apply(EXAMPLE_RESULTS[4].float(), N_GEN_FFT, N_GEN_MEL_CHANNELS, GEN_HOP_LEN)
-    print(melspec.shape)
-    stft = MelToSTFTWithGradients.apply(melspec.clone(), N_GEN_FFT)
-    audio = stft_to_audio(stft, GEN_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING)
+    stft = AudioToStftWithGradients.apply(EXAMPLE_RESULTS[2].float(), DIS_N_FFT, DIS_HOP_LEN)
+    specgram = stft_to_specgram(stft)
+    print(specgram.shape)
+    stft = specgram_to_stft(specgram)
+    audio = stft_to_audio(stft, DIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING)
     print(audio.shape)
-    write_normalized_audio_to_disk(EXAMPLE_RESULTS[4].float(), './test1.wav')
+    write_normalized_audio_to_disk(EXAMPLE_RESULTS[2].float(), './test1.wav')
     write_normalized_audio_to_disk(audio, "./test2.wav")
-    """
+    
     # fig, ax = plt.subplots()
     # img = librosa.display.specshow(melspec.cpu().numpy(), ax=ax, sr=SAMPLE_RATE, hop_length=VIS_HOP_LEN)
     # fig.colorbar(img, ax=ax)
@@ -704,7 +708,7 @@ if __name__ == "__main__":
         else:
             data = onestep.generate_one_step()
             if GEN_MODE == 4 and DIS_MODE == 2:
-                data = MelToSTFTWithGradients.apply(data[:,:], N_GEN_FFT)
+                data = MelToSTFTWithGradients.apply(data[:,:], N_GEN_MEL_CHANNELS)
                 data = stft_to_audio(data, GEN_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING)
     end_time = round(time.time() - start_time, 2)
     print("Generated output in", end_time, "sec.")
@@ -713,12 +717,12 @@ if __name__ == "__main__":
 
     write_normalized_audio_to_disk(data, 'out1.wav')
 
-    plot_metrics(i, save_to_disk=True)
+    #plot_metrics(i, save_to_disk=True)
 
     print("Saving models...")
     save_states(i)
 
     print("Done!")
-
+    dist.destroy_process_group()
     pygame.quit()
 

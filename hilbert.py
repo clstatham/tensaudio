@@ -40,7 +40,7 @@ def inverse_hilbert_pytorch(amplitude_envelope, instantaneous_phase):
     # for i in range(len(cos)):
     #    out.append(cos[i] + sin[i])
     # return torch.as_tensor(out)
-    return torch.cat((torch.zeros(1).cuda(), inst_freq_pytorch(instantaneous_phase))) * amplitude_envelope
+    return torch.cat((torch.zeros(1).to(0), inst_freq_pytorch(instantaneous_phase))) * amplitude_envelope
 
 class HilbertWithGradients(Function):
     @staticmethod
@@ -122,9 +122,9 @@ def hilbert_from_scratch_pytorch(u, return_amp_phase=True):
         phi_adj[dphi.abs()<np.pi] = 0
         inst_phas = phi + phi_adj.cumsum(-1)
 
-        return amp_env.cuda(), inst_phas.cuda()
+        return amp_env.to(0), inst_phas.to(0)
     else:
-        return v.cuda()
+        return v.to(0)
 
 def my_hilbert(inp):
     analytic_signal = scipy.signal.hilbert(inp.detach().cpu().numpy())

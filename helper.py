@@ -89,7 +89,7 @@ def find_shape_from(actual, exp_batches, exp_channels, exp_timesteps):
 #         delta = t.shape[0] - size
 #         if delta < 0:
 #         if type(t) == torch.Tensor:
-#             t = torch.cat((t, torch.zeros(-delta).cuda()))
+#             t = torch.cat((t, torch.zeros(-delta).to(0)))
 #         else:
 #             t = np.concatenate((t, np.zeros(-delta)))
 #         elif delta > 0:
@@ -98,7 +98,7 @@ def find_shape_from(actual, exp_batches, exp_channels, exp_timesteps):
 #         delta = t.shape[1]*channels - size
 #         if delta < 0:
 #             if type(t) == torch.Tensor:
-#                 t = torch.tensor([torch.cat(t[i], torch.zeros(t[i].shape[0])) for i in range(channels)]).cuda()
+#                 t = torch.tensor([torch.cat(t[i], torch.zeros(t[i].shape[0])) for i in range(channels)]).to(0)
 #             else:
 #                 t = [np.concatenate(t[i], np.zeros(len(t[i]))) for i in range(channels)]
 #         elif delta > 0:
@@ -139,19 +139,19 @@ def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, g
                     b, c, s = find_shape_from(actual+delta, exp_batches, exp_channels, exp_timesteps)
                 except:
                     pass
-            t = torch.cat((t, torch.zeros(delta).cuda()))
+            t = torch.cat((t, torch.zeros(delta).to(0)))
         else:
             raise e
     if greedy:
         if return_shape:
-            return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s)), delta, (b,c,s)
+            return torch.reshape(torch.as_tensor(t).to(0), (b, c, s)), delta, (b,c,s)
         else:
-            return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s)), delta
+            return torch.reshape(torch.as_tensor(t).to(0), (b, c, s)), delta
     else:
         if return_shape:
-            return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s)), (b,c,s)
+            return torch.reshape(torch.as_tensor(t).to(0), (b, c, s)), (b,c,s)
         else:
-            return torch.reshape(torch.as_tensor(t).cuda(), (b, c, s))
+            return torch.reshape(torch.as_tensor(t).to(0), (b, c, s))
 #return tf.reshape(t, (N_BATCHES, 2, 1))
 def normalize_audio(audio):
     return F.normalize(audio.flatten(), dim=0)
@@ -184,7 +184,7 @@ def unwrap_pytorch(p, discont=np.pi, dim=-2):
     ddmod = torch.where(idx, torch.zeros_like(ddmod), dd)
     ph_cumsum = torch.cumsum(ph_correct, dim=dim)
 
-    shape = p.get_shape().as_list()
+    shape = list(p.shape)
     shape[axis] = 1
     ph_cumsum = torch.cat([torch.zeros(shape, dtype=p.dtype), ph_cumsum], dim=dim)
     unwrapped = p + ph_cumsum
@@ -193,7 +193,7 @@ def unwrap_pytorch(p, discont=np.pi, dim=-2):
 def inst_freq(p):
     return np.diff(p) / (2.0*np.pi) * len(p)
 def inst_freq_pytorch(p, time_dim=-2):
-    return diff_pytorch(p) / (2.0*np.pi) * p.size(time_dim)
+    return  diff_pytorch(p) / (2.0*np.pi * p.size(time_dim))
 def inst_freq_pytorch_2(phase_angle, time_dim=-2, use_unwrap=False):
     """Transform a fft tensor from phase angle to instantaneous frequency.
     Take the finite difference of the phase. Pad with initial phase to keep the
@@ -231,15 +231,21 @@ def polar_to_rect(mag, phase_angle):
     return mag * phase
 
 def stft_to_specgram(stft):
-    logmag = torch.log(torch.abs(stft))
+    logmag = torch.log(torch.abs(stft) + EPSILON)
     phase_angle = torch.angle(stft)
     p = inst_freq_pytorch(phase_angle)
     return torch.stack((logmag, p), dim=0)
 def specgram_to_stft(specgram):
     logmag = specgram[0,:,:]
     p = specgram[1,:,:]
+    #mel_filters = torchaudio.functional.create_fb_matrix(mel_mag.size(1), 0, SAMPLE_RATE//2, mel_mag.size(0), SAMPLE_RATE).to(mel_mag.device)
+    #mag = 0.5 * torch.tensordot(mel_mag, mel_filters, 1)
     mag = torch.exp(logmag)
-    phase_angle = torch.cumsum(p * np.pi, dim=-1)
+    #mag = 0.5 * MelToSTFTWithGradients.apply(mel_mag, mel_mag.size(0))
+    phase_angle = torch.cumsum(p * np.pi, -2)
+    #phase_angle = p * np.pi
+    #phase_angle = torch.tensordot(mel_phase_angle, mel_filters, 1)
+    #phase_angle = MelToSTFTWithGradients.apply(mel_phase_angle, mel_phase_angle.size(0))
     return polar_to_rect(mag, phase_angle)
 
 class STFTToSpecgramWithGradients(Function):
@@ -281,7 +287,7 @@ class AudioToStftWithGradients(Function):
         p_ = p.detach().clone().cpu().float().numpy()
         #stft = librosa.stft(p_, n_fft=n_fft)
         ctx.save_for_backward(p)
-        stft = torch.from_numpy(librosa.stft(p_, n_fft=n_fft, hop_length=hop_len))
+        stft = torch.from_numpy(np.abs(librosa.stft(p_, n_fft=n_fft, hop_length=hop_len, center=True)))
         #melspec = MelSpectrogram(SAMPLE_RATE, n_fft, hop_length=1, n_mels=n_mels)(p_)
         return p.new(stft.to(p.device))
 
@@ -299,7 +305,7 @@ class AudioToMelWithGradients(Function):
         #stft = librosa.stft(p_, n_fft=n_fft)
         ctx.save_for_backward(p)
         stft = librosa.stft(p_, n_fft=n_fft, hop_length=hop_len)
-        melspec = librosa.feature.melspectrogram(S=np.abs(stft), sr=SAMPLE_RATE, n_mels=n_mels, power=power)
+        melspec = librosa.feature.melspectrogram(S=np.abs(stft), sr=SAMPLE_RATE, n_mels=n_mels, power=power, center=True)
         melspec = torch.from_numpy(melspec)
         #melspec = MelSpectrogram(SAMPLE_RATE, n_fft, hop_length=1, n_mels=n_mels)(p_)
         return p.new(melspec.to(p.device))
@@ -315,92 +321,52 @@ def stft_to_audio(stft, hop_len, n_iter):
     stft_ = stft.detach().clone().cpu().numpy()
     if n_iter > 0:
         print("Inverse STFT: Running Griffin-Lim for", n_iter, "iters...")
-        audio = torch.from_numpy(librosa.griffinlim(stft_, n_iter=n_iter, hop_length=hop_len))
+        audio = librosa.griffinlim(stft_, n_iter=n_iter, hop_length=hop_len, center=True)
     else:
         print("Inverse STFT: Taking ISTFT...")
-        audio = torch.from_numpy(librosa.istft(stft_, hop_length=hop_len))
-    return audio
-
-class STFTToAudioWithGradients(Function):
-    @staticmethod
-    def forward(ctx, stft, hop_len, n_iter):
-        stft_ = stft.detach().clone().cpu().numpy()
-        ctx.save_for_backward(stft)
-        if n_iter > 0:
-            print("Inverse STFT: Running Griffin-Lim for", n_iter, "iters...")
-            audio = torch.from_numpy(librosa.griffinlim(stft_, n_iter=n_iter, hop_length=hop_len))
-        else:
-            print("Inverse STFT: Taking ISTFT...")
-            audio = torch.from_numpy(librosa.istft(stft_, hop_length=hop_len))
-        print("Inverse STFT: Done!")
-        return stft.new(audio.to(stft.device))
-    
-    @staticmethod
-    def backward(ctx, grad_output):
-        if grad_output is None:
-            return None, None, None
-        #numpy_go = grad_output.cpu().numpy()
-        return ctx.saved_tensors[0], None, None
+        audio = librosa.istft(stft_, hop_length=hop_len, center=True)
+    return torch.from_numpy(audio).to(stft.device)
 
 class MelToSTFTWithGradients(Function):
     @staticmethod
-    def forward(ctx, p, n_fft, power=2):
-        B = p.detach().clone().cpu().squeeze().numpy().astype(np.double)
+    def forward(ctx, p, n_mels=N_GEN_MEL_CHANNELS, n_fft=N_GEN_FFT, power=2):
+        B = p.detach().clone().cpu().squeeze().numpy()
         ctx.save_for_backward(p)
-        #audio = torch.from_numpy(librosa.feature.inverse.mel_to_audio(B, sr=SAMPLE_RATE, n_fft=n_fft, hop_length=hop_len, power=power)).float()
+        
+        stft = torch.from_numpy(librosa.feature.inverse.mel_to_stft(B, sr=SAMPLE_RATE, n_fft=n_fft).astype(B.dtype))
 
-        with torch.enable_grad():
-            #stft = torch.from_numpy(librosa.feature.inverse.mel_to_stft(B, sr=SAMPLE_RATE, n_fft=n_fft, power=power))
+        # with torch.enable_grad():
+        #     A = librosa.filters.mel(SAMPLE_RATE, n_fft, n_mels=n_mels).astype(B.dtype)
+        #     n_columns = 1
 
-            A = librosa.filters.mel(SAMPLE_RATE, n_fft, n_mels=N_GEN_MEL_CHANNELS).astype(np.double)
+        #     x = np.linalg.lstsq(A, B, rcond=None)[0].astype(A.dtype)
+        #     np.clip(x, 0, None, out=x)
 
-            MAX_MEM_BLOCK = 2 ** 8 * 2 ** 10
-            #n_columns = MAX_MEM_BLOCK // (A.shape[-1] * A.itemsize)
-            #n_columns = max(n_columns, 1)
-            n_columns = 1
-
-            x = np.linalg.lstsq(A, B, rcond=None)[0].astype(A.dtype)
-            np.clip(x, 0, None, out=x)
-
-            #print("A.shape:", A.shape)
-            #print("B.shape:", B.shape)
-            #print("x.shape:", x.shape)
-            solver = NNLSSolver.instance()
-
-            print("Inverse Mel: Calculating NNLS for", x.shape[-1], "iters...")
-            for bl_s in range(0, x.shape[-1], n_columns):
-                bl_t = min(bl_s + n_columns, B.shape[-1])
-                bl_t = max(bl_t, 1)
-                
-                #input_x = x_init[:, bl_s:bl_t]
-                #input_a = np.dot(A, input_x)
-                #input_b = B[:, bl_s:bl_t].copy()
-                input_b = B[:, bl_s].copy()
-                #print("input_a.shape:", A.shape)
-                #print("input_b.shape:", input_b.shape)
-
-                #result = solver.solve(A, input_b, input_b.shape[1])
-                result = scipy.optimize.nnls(A, input_b)[0]
-                #print("result.shape:", result.shape)
-                #x[:, bl_s:bl_t] = result
-                x[:, bl_s] = result
-            
-            #x = librosa.util.nnls(A, B, maxiter=n_iter)
-            stft = np.power(x, 1.0 / power)
-
-            # #stft = stft.detach().cpu().numpy()
-            # if n_iter > 0:
-            #     print("Inverse Mel: Running Griffin-Lim for", n_iter, "iters...")
-            #     audio = torch.from_numpy(librosa.griffinlim(stft, n_iter=n_iter, hop_length=hop_len)).to(torch.float)
-            # else:
-            #     print("Inverse Mel: Taking STFT...")
-            #     audio = torch.from_numpy(librosa.istft(stft, hop_length=hop_len)).to(torch.float)
-            # print("Inverse Mel: Done!")
-        return p.new(torch.from_numpy(stft).to(p.device).to(torch.float))
+        #     print("Inverse Mel: Calculating NNLS for", x.shape[-1], "iters...")
+        #     for bl_s in range(0, x.shape[-1], n_columns):
+        #         bl_t = min(bl_s + n_columns, B.shape[-1])
+        #         bl_t = max(bl_t, 1)
+        #         if bl_s == x.shape[-1]//4:
+        #             print('Inverse Mel: 25% done...')
+        #         elif bl_s == 2*x.shape[-1]//4:
+        #             print('Inverse Mel: 50% done...')
+        #         elif bl_s == 3*x.shape[-1]//4:
+        #             print('Inverse Mel: 75% done...')
+        #         input_b = B[:, bl_s].copy()
+        #         result = scipy.optimize.nnls(A, input_b)[0]
+        #         x[:, bl_s] = result
+        #     stft = np.power(x, 1.0 / power)
+        #     print("Inverse Mel: Done!")
+        #with torch.enable_grad():
+            #stft = torchaudio.transforms.InverseMelScale(n_fft, n_mels, SAMPLE_RATE)(B)
+        #mel_filters = torchaudio.functional.create_fb_matrix(n_fft, 0, SAMPLE_RATE//2, n_mels, SAMPLE_RATE)
+        #mel_filters = librosa.filters.mel(SAMPLE_RATE, n_fft, n_mels)
+        #stft = torch.tensordot(B.transpose(-1,-2), mel_filters, 1)
+        return p.new(stft.to(p.device).to(p.dtype))
 
     @staticmethod
     def backward(ctx, grad_output):
         if grad_output is None:
-            return None, None, None
+            return None, None, None, None
         #numpy_go = grad_output.cpu().numpy()
-        return ctx.saved_tensors[0], None, None
+        return ctx.saved_tensors[0], None, None, None
