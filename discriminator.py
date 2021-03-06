@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import torch.autograd as ag
 import torchaudio
 import torchaudio.transforms
+from online_norm_pytorch import OnlineNorm1d, OnlineNorm2d
 from helper import *
 from global_constants import *
 from hilbert import *
@@ -20,15 +21,17 @@ class TADiscriminator(nn.Module):
 
         self.n_layers = N_DIS_LAYERS
         self.ksz = DIS_KERNEL_SIZE
-        if DIS_MODE == 0:
-            self.ndf = 2
-        elif DIS_MODE in [1, 3]:
+        self.stride = DIS_STRIDE
+        if DIS_MODE in [0, 3]:
+            self.ndf = self.n_layers // 2
+            self.samps = TOTAL_SAMPLES_OUT * 2
+        elif DIS_MODE == 1:
             self.ndf = TOTAL_SAMPLES_OUT
         elif DIS_MODE == 2:
             self.ndf = DIS_N_MELS
         else:
             raise ValueError("Invalid discriminator mode!")
-        self.stride = DIS_STRIDE
+        
 
         self.net = []
         #self.net.append(nn.Identity())
@@ -36,35 +39,41 @@ class TADiscriminator(nn.Module):
         c = self.ndf * 2
         n = self.ndf
         for _ in range(self.n_layers):
-            if DIS_MODE in [0, 1, 3]:
+            if DIS_MODE in [1]:
                 c = int(self.ndf * 2**i)
-                n = int(self.ndf * 2**(i-4))
-                i -= 4
-                self.net.append(nn.Conv1d(c, n, self.ksz, self.stride, 0, bias=False).to(0))
+                n = int(self.ndf * 2**(i+4))
+                i += 4
+                self.net.append(nn.Conv1d(c, n, self.ksz, self.stride, groups=1, bias=False).to(0))
                 if i < self.n_layers:
-                    self.net.append(nn.BatchNorm1d(n).to(0))
+                    self.net.append(OnlineNorm2d(n).to(0))
             else:
                 c = int(self.ndf * 2**i)
-                n = int(self.ndf * 2**(i-1))
-                i -= 1
-                self.net.append(nn.Conv1d(c, n, self.ksz, 1, 0, bias=False).to(0))
+                n = int(self.ndf * 2**(i+1))
+                i += 1
+                sqrt_samps = int(np.sqrt(self.samps))
+                x = (self.samps // 2 - (self.ksz - 1) - 1) // self.stride + 1
+                y = 2
+                self.samps = x*y
+                self.net.append(nn.Conv2d(c, n, (2, self.ksz), (1, self.stride), groups=1, bias=False).to(0))
                 if i < self.n_layers:
-                    self.net.append(nn.BatchNorm1d(n).to(0))
+                    self.net.append(OnlineNorm2d(n).to(0))
             if i < self.n_layers:
                 self.net.append(nn.LeakyReLU(0.2, inplace=True).to(0))
             
         #self.net.append(nn.Flatten().to(0))
-        if DIS_MODE in [0, 1, 3]:
-            self.net.append(nn.Conv1d(n, 1, 1, 1, 0, bias=False).to(0))
+        if DIS_MODE in [1]:
+            self.net.append(nn.Conv1d(n, 1, 1, 1, groups=1, bias=False).to(0))
         else:
-            self.net.append(nn.Conv1d(n, 1, 1, 1, 0, bias=False).to(0))
+            sqrt_samps_d2 = int(np.sqrt(self.samps//2))
+            k = sqrt_samps_d2 // 2
+            self.net.append(nn.Conv2d(n, 1, (2, k), 1, groups=1, bias=False).to(0))
         #self.net.append(nn.Softsign().to(0))
         self.net.append(nn.Sigmoid().to(0))
         self.net.append(nn.Flatten().to(0))
         
         
 
-        self.net = nn.Sequential(*self.net)
+        self.net = nn.ModuleList(self.net).to(0)
     
     def criterion(self, label, output):
         return self.loss(output.to(0), label.to(0))
@@ -91,8 +100,12 @@ class TADiscriminator(nn.Module):
                 #         ).to(0),0),3).to(0), requires_grad=True).to(0)
             #mel1.retain_grad()
         elif DIS_MODE == 3:
-            amp_env, inst_phas = hilbert_from_scratch_pytorch(inp.to(torch.float), n=TOTAL_SAMPLES_OUT)
-            actual_input = ag.Variable(torch.unsqueeze(torch.stack((amp_env, inst_phas)), -1).to(0).permute(2,0,1), requires_grad=True).to(0)
+            specgram = audio_to_specgram(inp.view(-1)).view(1, self.ndf, 2, -1).to(0)
+            actual_input = ag.Variable(specgram, requires_grad=True).to(0)
 
-        verdicts = self.net.forward(actual_input)
+        verdicts = actual_input
+        for layer in self.net:
+            if layer.__class__.__name__.find('Conv') != -1:
+                verdicts = verdicts.view(1, layer.in_channels, 2, -1)
+            verdicts = layer(verdicts)
         return verdicts.clamp(0.001+FAKE_LABEL, 0.999*REAL_LABEL+FAKE_LABEL).squeeze()

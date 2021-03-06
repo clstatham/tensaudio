@@ -94,38 +94,6 @@ def hilbert_from_scratch(u):
     v = np.fft.ifft(U)
     return v
 
-def hilbert_from_scratch_pytorch(u, return_amp_phase=True):
-    # N : fft length
-    # M : number of elements to zero out
-    # U : DFT of u
-    # v : IDFT of H(U)
-
-    N = len(u.flatten())
-    # take forward Fourier transform
-    U = torch.fft.fft(u.flatten())
-    M = N - N//2 - 1
-    # zero out negative frequency components
-    U[N//2+1:] = torch.zeros(M)
-    # double fft energy except @ DC0
-    U[1:N//2] = 2 * U[1:N//2]
-    # take inverse Fourier transform
-    v = torch.fft.ifft(U)
-    if return_amp_phase:
-        amp_env = torch.abs(torch.imag(v))
-        phi = torch.angle(torch.imag(v))
-
-        # credit to Past-Future-AI @ Pytorch forums for this one
-        dphi = diff_pytorch(phi)
-        dphi_m = ((dphi+np.pi) % (2*np.pi)) - np.pi
-        dphi_m[(dphi_m==-np.pi)&(dphi>0)] = np.pi
-        phi_adj = dphi_m-dphi
-        phi_adj[dphi.abs()<np.pi] = 0
-        inst_phas = phi + phi_adj.cumsum(-1)
-
-        return amp_env.to(0), inst_phas.to(0)
-    else:
-        return v.to(0)
-
 def my_hilbert(inp):
     analytic_signal = scipy.signal.hilbert(inp.detach().cpu().numpy())
     #analytic_signal = hilbert_from_scratch(inp)

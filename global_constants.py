@@ -14,8 +14,8 @@ VIS_HEIGHT = 900
 
 VIS_UPDATE_INTERVAL = 2 # iterations
 
-VIS_N_FFT = 128
-VIS_HOP_LEN = VIS_N_FFT//8
+VIS_N_FFT = 2048
+VIS_HOP_LEN = VIS_N_FFT//4
 
 EPSILON = 1e-9
 
@@ -45,21 +45,21 @@ GEN_MODE = 6            # 0 = RNNConv/Hilbert mode
                         # 3 = Conv/Audio mode
                         # 4 = Conv/Mel mode
                         # 5 = Conv/STFT mode
-                        # 6 = Conv/"Specgram" mode (A specgram is a tensor of log magnitudes and instantaneous frequencies with format [2, mel/time, freq/phase])
+                        # 6 = Conv/"Specgram" mode (A specgram is a tensor of log magnitudes and instantaneous frequencies with format [1, 2, time])
                         # 10 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
 SAMPLE_RATE = 22050
 GEN_SAMPLE_RATE_FACTOR = 1
 SUBTYPE = 'PCM_16'
 INPUT_DURATION = 8 / SAMPLE_RATE
-OUTPUT_DURATION = 2**17 / SAMPLE_RATE
+OUTPUT_DURATION = 2**16 / SAMPLE_RATE
 
-GEN_SCALE_LIN = 1          # higher = more memory, must be 1 or greater
-GEN_KERNEL_SIZE_UPSCALING = 21    # higher = more memory, supposedly odd numbers work better
+GEN_SCALE_LIN = 8          # higher = more memory, must be 1 or greater
+GEN_KERNEL_SIZE_UPSCALING = 555    # higher = more memory, supposedly odd numbers work better
 GEN_STRIDE_UPSCALING = 3      # higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
-GEN_KERNEL_SIZE_DOWNSCALING = 23   # higher = more memory, supposedly odd numbers work better
+GEN_KERNEL_SIZE_DOWNSCALING = 513   # higher = more memory, supposedly odd numbers work better
 GEN_STRIDE_DOWNSCALING = 2          # must be 1 or greater
-MIN_N_GEN_LAYERS = 4
+MIN_N_GEN_LAYERS = 20
 
 # Audio mode only
 N_CHANNELS = 1
@@ -92,15 +92,15 @@ GENERATOR_BETA = 0.5
 # an error!
 INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
                         # 'conv' = comparison of example and convolved example result
-DIS_MODE = 2            # 0 = Direct mode
+DIS_MODE = 3            # 0 = Direct mode
                         # 1 = FFT mode
                         # 2 = Mel mode
-                        # 3 = Hilbert mode
+                        # 3 = Specgram mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
 N_DIS_LAYERS = 4
-DIS_STRIDE = 5
-DIS_KERNEL_SIZE = 2
+DIS_STRIDE = 4
+DIS_KERNEL_SIZE = 1
 DIS_N_FFT = VIS_N_FFT
 DIS_N_MELS = N_GEN_MEL_CHANNELS
 DIS_HOP_LEN = VIS_HOP_LEN
@@ -133,7 +133,7 @@ if TOTAL_SAMPLES_OUT % N_BATCHES != 0:
     raise ValueError("Could not calculate SAMPLES_PER_BATCH: Total length of audio not divisible by", N_BATCHES)
 KONTROL_SECONDS = KONTROL_SAMPLES/SAMPLE_RATE
 
-GEN_N_BINS = librosa.samples_to_frames(TOTAL_SAMPLES_OUT, GEN_HOP_LEN, N_GEN_FFT)
+GEN_N_FRAMES = librosa.samples_to_frames(TOTAL_SAMPLES_OUT, GEN_HOP_LEN, N_GEN_FFT)
 
 def print_global_constants():
     print("v-"*39 + "v")

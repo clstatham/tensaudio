@@ -165,7 +165,7 @@ def write_normalized_audio_to_disk(sig, fn):
 def diff_pytorch(phi, dim=-1):
     return phi - F.pad(phi, (1, 0))[..., :dim]
 
-def unwrap_pytorch(p, discont=np.pi, dim=-2):
+def unwrap_pytorch(p, discont=np.pi, dim=-1):
     """Unwrap a cyclical phase tensor.
     (Ported to PyTorch from GANsynth project by clstatham)
     Args:
@@ -175,9 +175,9 @@ def unwrap_pytorch(p, discont=np.pi, dim=-2):
     Returns:
         unwrapped: Unwrapped tensor of same size as input.
     """
-    dd = diff(p, dim=dim)
+    dd = diff_pytorch(p, dim=dim)
     ddmod = (dd + np.pi) % (2.0 * np.pi) - np.pi
-    idx = torch.logical_and(torch.equal(ddmod, -np.pi), torch.greater(dd, 0))
+    idx = torch.logical_and(torch.eq(ddmod, -np.pi * torch.ones_like(ddmod).to(ddmod.device)), torch.greater(dd, torch.zeros_like(dd).to(dd.device)))
     ddmod = torch.where(idx, torch.ones_like(ddmod) * np.pi, ddmod)
     ph_correct = ddmod - dd
     idx = torch.less(torch.abs(dd), discont)
@@ -185,16 +185,16 @@ def unwrap_pytorch(p, discont=np.pi, dim=-2):
     ph_cumsum = torch.cumsum(ph_correct, dim=dim)
 
     shape = list(p.shape)
-    shape[axis] = 1
-    ph_cumsum = torch.cat([torch.zeros(shape, dtype=p.dtype), ph_cumsum], dim=dim)
-    unwrapped = p + ph_cumsum
+    shape[dim] = 1
+    ph_cumsum = torch.cat([torch.zeros(shape, dtype=p.dtype).to(ph_cumsum.device), ph_cumsum], dim=dim)
+    unwrapped = p + ph_cumsum[:p.shape[-1]]
     return unwrapped
 
 def inst_freq(p):
     return np.diff(p) / (2.0*np.pi) * len(p)
-def inst_freq_pytorch(p, time_dim=-2):
+def inst_freq_pytorch(p, time_dim=-1):
     return  diff_pytorch(p) / (2.0*np.pi * p.size(time_dim))
-def inst_freq_pytorch_2(phase_angle, time_dim=-2, use_unwrap=False):
+def inst_freq_pytorch_2(phase_angle, time_dim=-1, use_unwrap=True):
     """Transform a fft tensor from phase angle to instantaneous frequency.
     Take the finite difference of the phase. Pad with initial phase to keep the
     tensor the same size.
@@ -218,35 +218,76 @@ def inst_freq_pytorch_2(phase_angle, time_dim=-2, use_unwrap=False):
         dphase = torch.where(dphase < -np.pi, dphase + 2 * np.pi, dphase)
 
     # Add an initial phase to dphase.
-    size = phase_angle.shape
-    size[time_axis] = 1
+    size = list(phase_angle.shape)
+    size[time_dim] = 1
     begin = [0 for unused_s in size]
-    phase_slice = torch.narrow(phase_angle, dim=0, start=begin, length=size)
-    dphase = torch.cat([phase_slice, dphase], dim=time_dim) / np.pi
+    phase_slice = torch.narrow(phase_angle, dim=0, start=0, length=size[0])
+    dphase = torch.cat((phase_slice, dphase), dim=time_dim) / np.pi
     return dphase
 
 def polar_to_rect(mag, phase_angle):
     mag = torch.complex(mag, torch.zeros(1, dtype=mag.dtype).to(mag.device))
-    phase = torch.complex(torch.cos(phase_angle), torch.sin(phase_angle))
+    phase = torch.complex(torch.cos(phase_angle), torch.sin(phase_angle)).to(mag.device)
     return mag * phase
 
-def stft_to_specgram(stft):
-    logmag = torch.log(torch.abs(stft) + EPSILON)
-    phase_angle = torch.angle(stft)
-    p = inst_freq_pytorch(phase_angle)
-    return torch.stack((logmag, p), dim=0)
-def specgram_to_stft(specgram):
-    logmag = specgram[0,:,:]
-    p = specgram[1,:,:]
-    #mel_filters = torchaudio.functional.create_fb_matrix(mel_mag.size(1), 0, SAMPLE_RATE//2, mel_mag.size(0), SAMPLE_RATE).to(mel_mag.device)
-    #mag = 0.5 * torch.tensordot(mel_mag, mel_filters, 1)
-    mag = torch.exp(logmag)
-    #mag = 0.5 * MelToSTFTWithGradients.apply(mel_mag, mel_mag.size(0))
-    phase_angle = torch.cumsum(p * np.pi, -2)
+# def stft_to_specgram(stft):
+#     logmag = torch.abs(stft)
+#     phase_angle = torch.angle(stft)
+#     p = inst_freq_pytorch_2(phase_angle)
+#     #p = phase_angle
+#     return torch.stack((logmag, p), dim=0)
+
+# def specgram_to_stft(specgram):
+#     mag = specgram[0,:,:]
+#     p = specgram[1,:,:]
+#     phase_angle = torch.cumsum(p * np.pi, -2)
+#     #phase_angle = p * np.pi
+#     return polar_to_rect(mag, phase_angle)
+
+def hilbert_from_scratch_pytorch(u):
+    # N : fft length
+    # M : number of elements to zero out
+    # U : DFT of u
+    # v : IDFT of H(U)
+
+    N = len(u.flatten())
+    # take forward Fourier transform
+    U = torch.fft.fft(u.flatten())
+    M = N - N//2 - 1
+    # zero out negative frequency components
+    U[N//2+1:] = torch.zeros(M)
+    # double fft energy except @ DC0
+    U[1:N//2] = 2 * U[1:N//2]
+    # take inverse Fourier transform
+    v = torch.fft.ifft(U)
+    if torch.isnan(v[0]):
+        #raise RuntimeError
+        pass
+    return v.to(0)
+
+def specgram_to_fft(specgram):
+    mag = specgram[0]
+    p = specgram[1]
+    phase_angle = torch.cumsum(p * np.pi, -1)
     #phase_angle = p * np.pi
-    #phase_angle = torch.tensordot(mel_phase_angle, mel_filters, 1)
-    #phase_angle = MelToSTFTWithGradients.apply(mel_phase_angle, mel_phase_angle.size(0))
     return polar_to_rect(mag, phase_angle)
+
+def audio_to_specgram(audio):
+    ana = hilbert_from_scratch_pytorch(audio)
+    #stft = torch.from_numpy(librosa.stft(audio.detach().clone().cpu().numpy(), n_fft=n_fft, hop_length=hop_len)).to(audio.device)
+    a = torch.abs(ana)
+    p = torch.atan2(ana.imag, ana.real)
+    f = inst_freq_pytorch_2(p, use_unwrap=False)[1:]
+    return torch.stack((a, f), dim=0).to(audio.device)
+
+def specgram_to_audio(specgram):
+    fft = specgram_to_fft(specgram)
+    invhilb = hilbert_from_scratch_pytorch(fft*-1)
+    out = torch.imag(invhilb).to(specgram.device)
+    if torch.isnan(out[0]):
+        #raise RuntimeError
+        pass
+    return out
 
 class STFTToSpecgramWithGradients(Function):
     @staticmethod
@@ -287,7 +328,7 @@ class AudioToStftWithGradients(Function):
         p_ = p.detach().clone().cpu().float().numpy()
         #stft = librosa.stft(p_, n_fft=n_fft)
         ctx.save_for_backward(p)
-        stft = torch.from_numpy(np.abs(librosa.stft(p_, n_fft=n_fft, hop_length=hop_len, center=True)))
+        stft = torch.from_numpy(librosa.stft(p_, n_fft=n_fft, hop_length=hop_len, center=True))
         #melspec = MelSpectrogram(SAMPLE_RATE, n_fft, hop_length=1, n_mels=n_mels)(p_)
         return p.new(stft.to(p.device))
 

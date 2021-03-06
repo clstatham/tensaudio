@@ -126,14 +126,14 @@ def plot_metrics(i, save_to_disk=False):
         if current_view_mode == 3:
             out_spec_fig, spec_ax3 = plt.subplots(1, 1, figsize=[VIS_WIDTH//50, VIS_HEIGHT//50], dpi=50, facecolor="white")
         else:
-            out_spec_fig, ((spec_ax1, spec_ax2), (spec_ax3, spec_ax4)) = plt.subplots(2, 2, figsize=[VIS_WIDTH//100, VIS_HEIGHT//50], dpi=50, facecolor="white")
+            out_spec_fig, (spec_ax3, spec_ax4) = plt.subplots(2, 1, figsize=[VIS_WIDTH//100, VIS_HEIGHT//50], dpi=50, facecolor="white")
         out_spec_fig.subplots_adjust(hspace=0.1, wspace=0.1, left=0.05, bottom=0.05, right=0.95, top=0.95)
 
         if current_view_mode == 1:
-            spec_ax1.set_title('Output Rainbowgram')
+            #spec_ax1.set_title('Output Rainbowgram')
             spec_ax3.set_title('Output Mel Spectrogram')
         elif current_view_mode == 2:
-            spec_ax1.set_title('Progress Rainbowgram')
+            #spec_ax1.set_title('Progress Rainbowgram')
             spec_ax3.set_title('Progress Mel Spectrogram')
         else:
             spec_ax3.set_title('Progress Mel Spectrogram')
@@ -141,18 +141,14 @@ def plot_metrics(i, save_to_disk=False):
             global current_output
             current_output = MelToSTFTWithGradients.apply(torch.from_numpy(current_output), N_GEN_MEL_CHANNELS)
             current_output = stft_to_audio(current_output, GEN_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING).detach().clone().cpu().numpy()
-        if DIS_MODE == 2:
-            global current_example
-            current_example = MelToSTFTWithGradients.apply(torch.from_numpy(current_example), DIS_N_MELS)
-            current_example = stft_to_audio(current_example, DIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING).detach().clone().cpu().numpy()
         if current_view_mode != 3:
-            spec_ax2.set_title('Example Rainbowgram')
+            #spec_ax2.set_title('Example Rainbowgram')
             spec_ax4.set_title('Example Mel Spectrogram')
-            note_specgram(current_output, spec_ax1, VIS_HOP_LEN)
-            note_specgram(current_example, spec_ax2, VIS_HOP_LEN)
-            spec_ax4.specgram(current_example, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
+            #note_specgram(current_output, spec_ax1, VIS_HOP_LEN)
+            #note_specgram(current_example, spec_ax2, VIS_HOP_LEN)
+            spec_ax4.specgram(current_example, VIS_N_FFT, noverlap=VIS_N_FFT//8, mode='psd', cmap=plt.get_cmap('rainbow'))
         
-        spec_ax3.specgram(current_output, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap='magma')
+        spec_ax3.specgram(current_output, VIS_N_FFT, noverlap=VIS_N_FFT//8, mode='psd', cmap=plt.get_cmap('rainbow'))
         
         canvas = agg.FigureCanvasAgg(out_spec_fig)
         canvas.draw()
@@ -211,7 +207,7 @@ def select_input(idx):
         x = np.concatenate((x, [0]*(TOTAL_SAMPLES_OUT-len(x))))
     
     x = x[:TOTAL_SAMPLES_OUT]
-    return normalize_audio(x)
+    return normalize_data(x)
 
 def get_example(idx):
     x = EXAMPLES[idx]
@@ -219,7 +215,7 @@ def get_example(idx):
         x = np.concatenate((x, [0]*(TOTAL_SAMPLES_OUT-len(x))))
 
     x = x[:TOTAL_SAMPLES_OUT]
-    return normalize_audio(x)
+    return normalize_data(x)
 def get_random_example():
     return get_example(np.random.randint(len(EXAMPLES)))
 
@@ -229,7 +225,7 @@ def get_example_result(idx):
         x = torch.cat((x, torch.zeros(TOTAL_SAMPLES_OUT-len(x))))
 
     x = x[:TOTAL_SAMPLES_OUT]
-    return normalize_audio(x)
+    return normalize_data(x)
 def get_random_example_result():
     return get_example_result(np.random.randint(len(EXAMPLE_RESULTS)))
 
@@ -240,20 +236,18 @@ class OneStep():
         super().__init__()
         self.generator = generator
 
-    @torch.no_grad()
     def generate_one_step(self, noise=None):
         if noise is None:
             noise = generate_input_noise().to(0)
         self.generator.eval()
-        predicted_logits = self.generator(noise.detach().clone())
+        with torch.no_grad():
+            predicted_logits = self.generator(noise.detach().clone())
         self.generator.train()
         return torch.squeeze(predicted_logits)
 
 def create_input():
         #x = get_random_example()
-        y = normalize_audio(torch.as_tensor(get_random_example_result())).to(0)
-        if DIS_MODE == 2:
-            y = AudioToMelWithGradients.apply(y, DIS_N_FFT, DIS_N_MELS, DIS_HOP_LEN)
+        y = normalize_data(torch.as_tensor(get_random_example_result())).to(0)
         #if INPUT_MODE == 'conv':
         #    y = torch.from_numpy(spectral_convolution(x, y)).to(0)
         return y
@@ -266,7 +260,7 @@ def generate_input_noise():
     elif GEN_MODE in [4]:
         return torch.randn(BATCH_SIZE, 1, N_GEN_MEL_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).to(0)
     elif GEN_MODE in [6]:
-        return torch.randn(BATCH_SIZE, 2, N_GEN_FFT // 4, TOTAL_SAMPLES_IN, requires_grad=True).to(0)
+        return torch.randn(BATCH_SIZE, 2, TOTAL_SAMPLES_IN, requires_grad=True).to(0)
     else:
         return torch.randn(BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True).to(0)
     
@@ -277,7 +271,7 @@ def weights_init(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
         nn.init.normal_(m.weight.data, 0.0, 0.02)
-    elif classname.find('Norm') != -1:
+    elif classname.find('BatchNorm') != -1:
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
 
@@ -320,7 +314,7 @@ def run_models(window, real):
     label = torch.full(verdict.shape, REAL_LABEL).to(torch.float).to(0)
     dis_loss_real = dis.criterion(label, verdict)
     #dis_loss_real.backward()
-    real_verdict = verdict.flatten().squeeze().mean().item()
+    real_verdict = verdict.item()
 
     if GEN_MODE in [5]:
         noise = generate_input_noise()
@@ -332,9 +326,10 @@ def run_models(window, real):
         fake = gen(noise)
     
     verdict = dis(fake.detach()).view(-1)
-    fake_verdict = verdict.flatten().squeeze().mean()
-    if torch.isnan(fake_verdict):
-        raise RuntimeError("Discriminator output NaN!")
+    fake_verdict = verdict.item()
+    if torch.isnan(verdict):
+        print("foo")
+        pass
     label = torch.full(verdict.shape, FAKE_LABEL).to(torch.float).to(0)
     dis_loss_fake = dis.criterion(label, verdict)
     #dis_loss_fake.backward()
@@ -389,7 +384,7 @@ def train_on_random(window, epoch, dirname):
             current_output = fake.detach().clone().cpu().numpy()
         elif current_view_mode in [2,3]:
             current_output = onestep.generate_one_step(training_noise).detach().clone().cpu().numpy()
-        current_example = real.detach().clone().cpu().numpy()
+        current_example = z.detach().clone().cpu().numpy()
         total_gen_losses.append(gen_loss.item())
         total_dis_losses.append(dis_loss.item())
 
@@ -664,14 +659,13 @@ if __name__ == "__main__":
     
     
     print("Creating test audio...")
-    stft = AudioToStftWithGradients.apply(EXAMPLE_RESULTS[2].float(), DIS_N_FFT, DIS_HOP_LEN)
-    specgram = stft_to_specgram(stft)
-    print(specgram.shape)
-    stft = specgram_to_stft(specgram)
-    audio = stft_to_audio(stft, DIS_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING)
-    print(audio.shape)
-    write_normalized_audio_to_disk(EXAMPLE_RESULTS[2].float(), './test1.wav')
-    write_normalized_audio_to_disk(audio, "./test2.wav")
+    specgram = audio_to_specgram(EXAMPLE_RESULTS[1].float())
+    #print(specgram[0].max())
+    #print(specgram[1].max())
+    audio = specgram_to_audio(specgram)
+
+    write_normalized_audio_to_disk(EXAMPLE_RESULTS[1].float(), './original audio.wav')
+    write_normalized_audio_to_disk(audio, "./specgram.wav")
     
     # fig, ax = plt.subplots()
     # img = librosa.display.specshow(melspec.cpu().numpy(), ax=ax, sr=SAMPLE_RATE, hop_length=VIS_HOP_LEN)

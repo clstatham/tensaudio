@@ -6,6 +6,8 @@ import torch.nn.functional as F
 import torch.autograd as ag
 import torchaudio
 
+from online_norm_pytorch import OnlineNorm1d, OnlineNorm2d
+
 from helper import *
 from hilbert import *
 from global_constants import *
@@ -179,71 +181,63 @@ class TAGenerator(nn.Module):
             self.linear_units_in = TOTAL_SAMPLES_IN * self.n_channels
             self.linear_units_out = TOTAL_SAMPLES_IN * GEN_SCALE_LIN * self.n_channels
             self.total_samp_out = TOTAL_SAMPLES_OUT
-            us = nn.ConvTranspose2d
-            ds = nn.Conv2d
-            bn = nn.SyncBatchNorm
-            pool = nn.AdaptiveAvgPool2d
+            us = nn.ConvTranspose1d
+            ds = nn.Conv1d
+            norm = OnlineNorm1d
+            pool = nn.AdaptiveAvgPool1d
         elif mode == 'mel':
             self.n_channels = 1
             self.n_fft = N_GEN_MEL_CHANNELS
             self.linear_units_in = TOTAL_SAMPLES_IN * self.n_fft
-            self.linear_units_out = (TOTAL_SAMPLES_IN * GEN_SCALE_LIN) * self.n_fft
-            self.total_samp_out = GEN_N_BINS
+            self.linear_units_out = TOTAL_SAMPLES_IN * GEN_SCALE_LIN * self.n_fft
+            self.total_samp_out = GEN_N_FRAMES
             us = nn.ConvTranspose2d
             ds = nn.Conv2d
-            bn = nn.SyncBatchNorm
-            pool = nn.AdaptiveAvgPool2d
-        elif mode == 'hilbert':
-            self.n_channels = 2
-            self.total_samp_out = self.n_channels * TOTAL_SAMPLES_OUT
-            us = nn.ConvTranspose2d
-            ds = nn.Conv2d
-            bn = nn.SyncBatchNorm
+            norm = OnlineNorm2d
             pool = nn.AdaptiveAvgPool2d
         elif mode == 'specgram':
-            self.n_channels = 2
-            self.n_fft = N_GEN_FFT // 2 + 1
-            self.initial_n_fft = N_GEN_FFT // 4
-            self.linear_units_in = TOTAL_SAMPLES_IN * self.initial_n_fft * self.n_channels
-            self.linear_units_out = (TOTAL_SAMPLES_IN * GEN_SCALE_LIN) * self.n_channels * (self.initial_n_fft // 2 + 1)
-            self.total_samp_out = GEN_N_BINS
+            self.n_channels = 1
+            self.n_fft = 2
+            self.linear_units_in = TOTAL_SAMPLES_IN * self.n_channels * self.n_fft
+            self.linear_units_out = TOTAL_SAMPLES_IN * GEN_SCALE_LIN * self.n_channels * self.n_fft
+            self.total_samp_out = int(TOTAL_SAMPLES_OUT * 1.2) # estimating how much we're gonna truncate by
             us = nn.ConvTranspose2d
             ds = nn.Conv2d
-            bn = nn.SyncBatchNorm
+            norm = OnlineNorm2d
             pool = nn.AdaptiveAvgPool2d
         lin = nn.Linear
         rs = torchaudio.transforms.Resample
 
         self.padding_mode = 'reflect'
+        self.use_bias = False
+        self.sr = SAMPLE_RATE
 
         v_cprint("*-"*39 + "*")
         v_cprint("Target length is", self.total_samp_out, "samples.")
 
         
         #self.initial_layer = nn.ReLU().to(0)
-        if mode == 'specgram':
-            self.initial_layers = [nn.ReLU(True).to(0)]
-            v_cprint("Created Activation layer.")
-        else:
-            self.initial_layers = [
-                nn.ReLU(True).to(0),
-                nn.Linear(self.linear_units_in, self.linear_units_out, bias=False).to(0),
-                nn.ReLU(True).to(0),
-            ]
-            v_cprint("Created Activation layer.")
-            v_cprint("Created Linear layer.", self.linear_units_in, ">", self.linear_units_out)
-            v_cprint("Created Activation layer.")
+        self.initial_layers = [
+            nn.ReLU(True).to(0),
+            nn.Linear(self.linear_units_in, self.linear_units_out, bias=self.use_bias).to(0),
+            nn.ReLU(True).to(0),
+        ]
+        v_cprint("Created Activation layer.")
+        v_cprint("Created Linear layer.", self.linear_units_in, ">", self.linear_units_out)
+        v_cprint("Created Activation layer.")
         
         # if mode == 'mel':
         #     v_cprint("Created Mel Spectrogram layer.")
         #     self.initial_layers.append(torchaudio.transforms.MelSpectrogram(self.sr, TOTAL_SAMPLES_IN, n_mels=self.n_channels))
         
         self.n_sets = 0
-        self.sr = SAMPLE_RATE
+        prob = 0.1
         s_us = GEN_STRIDE_UPSCALING
         k_us = GEN_KERNEL_SIZE_UPSCALING
         s_ds = GEN_STRIDE_DOWNSCALING
         k_ds = GEN_KERNEL_SIZE_DOWNSCALING
+        x = self.n_fft
+        y = self.linear_units_out
         samps_post_ds = self.linear_units_out
         while samps_post_ds < self.total_samp_out or self.n_sets < MIN_N_GEN_LAYERS:
             self.n_sets += 1
@@ -255,35 +249,54 @@ class TAGenerator(nn.Module):
             c = self.n_channels
             v_cprint("="*80)
 
-            if samps_post_ds > self.total_samp_out:
-                s_us = 1
-            else:
-                s_us = GEN_STRIDE_UPSCALING
+            # if samps_post_ds >= self.total_samp_out:
+            #     s_us = 1
+            # else:
+            #     s_us = GEN_STRIDE_UPSCALING
 
-            samps_post_us = int(np.sqrt(samps_post_ds-1) * s_us + (k_us-1) + 1)**2
-            #samps_post_us = (s_us * 2**(self.n_sets+1) // 2**self.n_sets) * samps_post_ds
-            self.conv_layers.append(us(c, n, (k_us, k_us), (s_us, s_us), bias=False).to(0))
+            if us.__name__.find('2d') != -1:
+                #samps_post_us = int(np.sqrt(samps_post_ds-1) * s_us + (k_us-1) + 1)**2
+                #sqrt_samps_post_ds = int(np.sqrt(samps_post_ds))
+                x = (x - 1) * 1    + (self.n_fft - 1) + 1
+                y = (y - 1) * s_us + (k_us       - 1) + 1
+                samps_post_us = x*y
+                self.conv_layers.append(us(c, n, (self.n_fft, k_us), (1, s_us), groups=c, bias=self.use_bias).to(0))
+            elif us.__name__.find('1d') != -1:
+                samps_post_us = int((samps_post_ds-1) * s_us + (k_us-1) + 1)
+                self.conv_layers.append(us(c, n, k_us, s_us, groups=c, bias=self.use_bias).to(0))
             #self.conv_layers.append(rs(2**self.n_sets, s_us * 2**(self.n_sets+1)).to(0))
             v_cprint("Created Upscaling layer.", samps_post_ds, "<", samps_post_us)
             
-            self.conv_layers.append(nn.ReLU(True).to(0))
+            self.conv_layers.append(nn.LeakyReLU(0.1, True).to(0))
             v_cprint("Created Activation layer.")
 
-            self.conv_layers.append(bn(n).to(0))
-            v_cprint("Created Normalization layer with", n, "channels.")
+            self.conv_layers.append(nn.Dropout(prob, True).to(0))
+            v_cprint("Created Dropout layer with", prob, "probability.")
             
-            samps_post_ds = int((np.sqrt(samps_post_us) - (k_ds-1) - 1) // s_ds + 1)**2
-            #self.conv_layers.append(ds(n, c, (k_ds, k_ds), (s_ds//2, s_ds//2), bias=False).to(0))
-            self.conv_layers.append(ds(n, c, (k_ds, k_ds), (s_ds, s_ds), bias=False).to(0))
-            self.conv_layers.append(pool((self.n_fft, samps_post_ds)).to(0))
+            if ds.__name__.find('2d') != -1:
+                # samps_post_ds = int((np.sqrt(samps_post_us) - (k_ds-1) - 1) // s_ds + 1)**2
+                # samps_post_ds = min(samps_post_ds, self.total_samp_out)
+                x = (x - (self.n_fft - 1) - 1) // 1    + 1
+                y = (y - (k_ds       - 1) - 1) // s_ds + 1
+                x = min(x, self.n_fft)
+                y = min(y, self.total_samp_out)
+                samps_post_ds = x*y
+                self.conv_layers.append(ds(n, c, (self.n_fft, k_ds), (1, s_ds), groups=n, bias=self.use_bias).to(0))
+                self.conv_layers.append(pool((x, y)).to(0))
+            elif ds.__name__.find('1d') != -1:
+                samps_post_ds = int((samps_post_us - (k_ds-1) - 1) // s_ds + 1)
+                samps_post_ds = min(samps_post_ds, self.total_samp_out)
+                self.conv_layers.append(ds(n, c, k_ds, s_ds, groups=n, bias=self.use_bias).to(0))
+                self.conv_layers.append(pool((samps_post_ds)).to(0))
             v_cprint("Created Downscaling layer.", samps_post_us, ">", samps_post_ds)
             
-            self.conv_layers.append(nn.Tanh().to(0))
+            self.conv_layers.append(nn.LeakyReLU(0.1, True).to(0))
             v_cprint("Created Activation layer.")
 
-            self.conv_layers.append(bn(c).to(0))
-            v_cprint("Created Normalization layer with", c, "channels.")
+            #self.conv_layers.append(norm(c).to(0))
+            #v_cprint("Created Normalization layer with", c, "channels.")
 
+            
             if self.n_sets == 1:
                 self.n_layers_per_set = len(self.conv_layers)
 
@@ -300,22 +313,21 @@ class TAGenerator(nn.Module):
         ]
 
         v_cprint("Created final layers.")
-        if mode == 'mel' or mode == 'hilbert' or mode == 'specgram':
+        if mode in ['mel', 'specgram']:
             self.final_layers = [
                 # torchaudio.transforms.InverseMelScale(self.n_bins, self.n_channels, self.sr),
                 # nn.Flatten().to(0),
-                #pool((self.n_bins, self.total_samp_out)).to(0),
+                pool((self.n_fft, self.total_samp_out)).to(0),
                 #nn.Tanh().to(0),
-                
-                nn.Identity(),
+                #nn.Identity(),
                 # #torchaudio.transforms.Resample(self.sr, SAMPLE_RATE),
                 # nn.Flatten().to(0),
             ]
         else:
             self.final_layers = [
-                #pool(self.total_samp_out).to(0),
+                pool(self.total_samp_out).to(0),
                 #nn.Tanh().to(0),
-                nn.Identity(),
+                #nn.Identity(),
                 #torchaudio.transforms.Resample(self.sr, SAMPLE_RATE),
             ]
         
@@ -325,33 +337,34 @@ class TAGenerator(nn.Module):
         self.final_layers = nn.Sequential(*self.final_layers).to(0)
 
     def sanity_check(self, data):
-        if not torch.isfinite(data.view(-1)[0]):
-            raise RuntimeError("Data is NaN!")
+        #if (not torch.isfinite(data.view(-1)[0])) or (torch.isnan(data.view(-1)[0])):
+            #raise RuntimeError("Data is NaN!")
+        pass
 
     def run_conv_net(self, data, mode):
-        pre_init = data.float()
-        vv_cprint("|}} Initial data.shape:", pre_init.shape)
+        if self.training:
+            data.retain_grad()
+        data = normalize_data(data.float())
+        vv_cprint("|}} Initial data.shape:", data.shape)
         if mode == 'mel':
             # no need to batch audio that's going to be Mel transformed
-            post_init = self.initial_layers(pre_init.view(BATCH_SIZE, self.linear_units_in))
-            post_usds = post_init.reshape((BATCH_SIZE, 1, self.n_fft, -1))
+            data = self.initial_layers(data.view(BATCH_SIZE, self.linear_units_in))
+            data = data.reshape((BATCH_SIZE, 1, self.n_fft, -1))
         elif mode == 'hilbert':
-            #post_init = self.initial_layers(pre_init.clone()).flatten()
-            #amp, phas = hilbert_from_scratch_pytorch(post_init)
-            #hilb = torch.stack((amp, phas)).to(0)
-            #pre_conv = hilb.unsqueeze(0).unsqueeze(-1)
-            post_init = self.initial_layers(pre_init.view(BATCH_SIZE, self.linear_units_in))
-            post_usds = post_init.reshape((BATCH_SIZE, self.n_channels, TOTAL_SAMPLES_IN))
+            data = self.initial_layers(data.view(BATCH_SIZE, self.linear_units_in))
+            data = data.reshape((BATCH_SIZE, self.n_channels, TOTAL_SAMPLES_IN))
         elif mode == 'specgram':
-            post_usds = self.initial_layers(pre_init)
-            #stft = AudioToStftWithGradients.apply(post_init.view(-1), self.initial_n_fft, GEN_HOP_LEN)
-            #post_usds = stft_to_specgram(stft).view(1, 2, self.initial_n_fft//2+1, -1)
+            data = self.initial_layers(data.view(BATCH_SIZE, self.linear_units_in))
+            #data = data.reshape((BATCH_SIZE, self.n_channels, 1, -1))
+            #stft = torch.from_numpy(librosa.stft(data.view(-1).detach().clone().cpu().numpy(), self.initial_n_fft, GEN_HOP_LEN)).to(data.device)
+            #data = stft_to_specgram(stft).view(1, 2, self.initial_n_fft//2+1, -1)
+            data = audio_to_specgram(data).view(BATCH_SIZE, self.n_channels, self.n_fft, -1)
         else:
-            post_init = pre_init.view(BATCH_SIZE, self.linear_units_in)
-            post_usds = self.initial_layers(post_init).reshape((BATCH_SIZE, self.n_channels, -1))
-            post_usds = post_usds.view(BATCH_SIZE, self.n_channels, 1, -1)
+            data = data.view(BATCH_SIZE, self.linear_units_in)
+            data = self.initial_layers(data).reshape((BATCH_SIZE, self.n_channels, -1))
+            data = data.view(BATCH_SIZE, self.n_channels, 1, -1)
 
-        self.sanity_check(post_usds)
+        self.sanity_check(data)
 
         def fix_size(x, dim, axis=-1):
             quot = x.shape[-1] / dim
@@ -367,99 +380,95 @@ class TAGenerator(nn.Module):
                 x = x[..., :-k]
             return x
         
-        def check_and_fix_size(x, dim, axis=-1):
-            len_shape = len(x.shape)
-            total = x.shape[axis]
+        def check_and_fix_size(y, dim, axis=-1):
+            len_shape = len(y.shape)
+            total = y.shape[axis]
             diff = dim - total
             if diff > 0:
+                x = fix_size(y, dim)
                 if axis == -1:
                     if len_shape == 2:
-                        return fix_size(x, dim, axis).reshape(x.shape[0], -1)
+                        return x.reshape(x.shape[0], -1)
                     elif len_shape == 3:
-                        return fix_size(x, dim, axis).reshape(x.shape[0], x.shape[1], -1)
+                        return x.reshape(x.shape[0], x.shape[1], -1)
                     elif len_shape == 4:
-                        return fix_size(x, dim, axis).reshape(x.shape[0], x.shape[1], x.shape[2], -1)
+                        return x.reshape(x.shape[0], x.shape[1], x.shape[2], -1)
                     else:
                         raise ValueError("check_and_fix_size() # of dims must be < 5 and > 1")
                 elif axis == -2:
                     if len_shape == 2:
-                        return fix_size(x, dim, axis).reshape(-1, x.shape[1])
+                        return x.reshape(-1, x.shape[1])
                     elif len_shape == 3:
-                        return fix_size(x, dim, axis).reshape(x.shape[0], -1, x.shape[2])
+                        return x.reshape(x.shape[0], -1, x.shape[2])
                     elif len_shape == 4:
-                        return fix_size(x, dim, axis).reshape(x.shape[0], x.shape[1], -1, x.shape[3])
+                        return x.reshape(x.shape[0], x.shape[1], -1, x.shape[3])
                     else:
                         raise ValueError("check_and_fix_size() # of dims must be < 5 and > 1")
                 elif axis == -3:
                     if len_shape == 3:
-                        return fix_size(x, dim, axis).reshape(-1, x.shape[1], x.shape[2])
+                        return x.reshape(-1, x.shape[1], x.shape[2])
                     elif len_shape == 4:
-                        return fix_size(x, dim, axis).reshape(x.shape[0], -1, x.shape[2], x.shape[3])
+                        return x.reshape(x.shape[0], -1, x.shape[2], x.shape[3])
                     else:
                         raise ValueError("check_and_fix_size() # of dims must be < 5 and > 1")
-                    return fix_size(x, dim, axis).reshape(out_shape)
                 else:
                     raise ValueError("check_and_fix_size() axis must be < 0 and > -4")
             elif diff < 0:
                 if axis == -1:
-                    return x[..., :diff]
+                    return y[..., :diff]
                 elif axis == -2:
-                    return x[..., :diff, :]
+                    return y[..., :diff, :]
                 elif axis == -3:
-                    return x[..., :diff, :, :]
+                    return y[..., :diff, :, :]
                 else:
                     raise ValueError("check_and_fix_size() axis must be < 0 and > -4")
             else:
-                return x
+                return y
 
         vv_cprint("|}} Initial layers done.")
-        vv_cprint("|}} data.shape:", post_usds.shape)
-        post_conv = post_usds
+        vv_cprint("|}} data.shape:", data.shape)
         for i in range(self.n_sets):
-            #dim = int(np.sqrt(pre_conv.shape[-2]))
-            #pre_us = post_conv.view(BATCH_SIZE, self.n_channels, -1)
-            t = self.conv_layers[i*self.n_layers_per_set].__class__.__name__
-            post_usds = self.conv_layers[i*self.n_layers_per_set](post_usds) # apply the upsampling layer
-            #print("Coming out of a", t, "with\t", post_usds.shape, "units.")
-            self.sanity_check(post_usds)
-            for j in range(1, self.n_layers_per_set):
+            for j in range(self.n_layers_per_set):
                 t = self.conv_layers[i*self.n_layers_per_set+j].__class__.__name__
-                post_usds = self.conv_layers[i*self.n_layers_per_set+j](post_usds) # apply the rest of the layers in the set
-                self.sanity_check(post_usds)
-                if t.find('Batch') != -1:
-                    #print("Coming out of a Pool layer with\t\t", post_usds.shape, "units.")
-                    pass
-        
+                data = self.conv_layers[i*self.n_layers_per_set+j](data)
+                data = check_and_fix_size(data, self.n_fft, -2)
+                data = data.view(BATCH_SIZE, self.n_channels, self.n_fft, -1)
+                if t.find('ReLU') != -1:
+                    for fft in range(data.shape[2]):
+                        data[:, :, fft] = F.normalize(data[:, :, fft], dim=-1)
         
         #post_process = self.conv_layers(pre_conv.clone())
         vv_cprint("|}} Convolution layers done.")
-        vv_cprint("|}} data.shape:", post_usds.shape)
+        vv_cprint("|}} data.shape:", data.shape)
 
-        #pre_final_lin = post_usds.view(BATCH_SIZE, -1)[-1, :self.total_samp_out].unsqueeze(0)
-        #post_final_lin = self.lin_layers[0](pre_final_lin).view(1, 2, self.n_bins, -1)
+        #pre_final_lin = data.view(BATCH_SIZE, -1)[-1, :self.total_samp_out].unsqueeze(0)
+        #data_lin = self.lin_layers[0](pre_final_lin).view(1, 2, self.n_bins, -1)
 
-        post_final = self.final_layers(post_usds)[-1]
-        self.sanity_check(post_final)
+        data = self.final_layers(data)[-1]
+        self.sanity_check(data)
         if mode == 'mel' and DIS_MODE == 2:
-            ret = check_and_fix_size(post_final.squeeze(), self.n_fft, -2)
+            ret = check_and_fix_size(data.squeeze(), self.n_fft, -2)
         elif mode == 'hilbert':
-            invhilb_inp = post_final.squeeze()[..., :TOTAL_SAMPLES_OUT]
+            invhilb_inp = data.squeeze()[..., :TOTAL_SAMPLES_OUT]
             ret = inverse_hilbert_pytorch(invhilb_inp[0], invhilb_inp[1]).flatten()#[:TOTAL_SAMPLES_OUT]
         elif mode == 'mel':
-            invmel_inp = check_and_fix_size(post_final, self.n_fft, -2)
+            invmel_inp = check_and_fix_size(data, self.n_fft, -2)
             stft = MelToSTFTWithGradients.apply(invmel_inp, self.n_fft)
             ret = stft_to_audio(stft, GEN_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_PREVIEW)
         elif mode == 'specgram':
-            #pre_pre_stft_inp = post_final.clone().squeeze().view(2, -1)
-            stft_inp = check_and_fix_size(post_final, self.n_fft, -2)
-            stft = specgram_to_stft(stft_inp)
-            ret = stft_to_audio(stft, GEN_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_PREVIEW)
+            specgram = data.clone().squeeze()[..., :TOTAL_SAMPLES_OUT]
+            if self.training:
+                specgram.retain_grad()
+            specgram[0] = F.normalize(specgram[0], dim=-1)
+            specgram[1] = F.normalize(specgram[1], dim=-1)
+            data = normalize_data(torch.tanh(specgram_to_audio(specgram)))
+            self.sanity_check(data)
         else:
-            ret = post_final.view(-1)[:TOTAL_SAMPLES_OUT]
+            ret = data.view(-1)[:TOTAL_SAMPLES_OUT]
         vv_cprint("|}} Final layers done.")
-        vv_cprint("|}} data.shape:", ret.shape)
+        vv_cprint("|}} data.shape:", data.shape)
         
-        return ret
+        return data
 
     def gen_conv(self, inputs, mode):
         assert(GEN_MODE in (2, 3, 4, 6))
@@ -472,7 +481,8 @@ class TAGenerator(nn.Module):
             return post_net
         else:
             if not torch.isfinite(post_net[0]):
-                print("Warning, got invalid output!")
+                #print("Warning, got invalid output!")
+                pass
             return post_net.squeeze()[:TOTAL_SAMPLES_OUT]
 
     def gen_fn(self, inputs):
