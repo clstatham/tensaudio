@@ -1,6 +1,6 @@
-RESOURCES_DIR = "D:\\tensaudio_resources\\"
+RESOURCES_DIR = "C:\\tensaudio_resources\\"
 EXAMPLES_DIR = "fire"
-EXAMPLE_RESULTS_DIR = "synthloops"
+EXAMPLE_RESULTS_DIR = "akwf"
 INPUTS_DIR = "inputs_kicks"
 
 PLOTS_DIR = "D:\\tensaudio_plots\\"
@@ -9,10 +9,10 @@ TRAINING_DIR = "D:\\tensaudio_training\\"
 MODEL_DIR = "D:\\tensaudio_models\\"
 
 # must be divisible by 100
-VIS_WIDTH = 1600
-VIS_HEIGHT = 900
+VIS_WIDTH = 800
+VIS_HEIGHT = 600
 
-VIS_UPDATE_INTERVAL = 2 # iterations
+VIS_UPDATE_INTERVAL = 10 # iterations
 
 VIS_N_FFT = 2048
 VIS_HOP_LEN = VIS_N_FFT//4
@@ -27,39 +27,43 @@ SLEEP_TIME = 0
 MAX_ITERS_PER_SEC = 0
 
 # set to 0 to disable periodically generating progress updates
-SAVE_EVERY_SECONDS = 5*60
+SAVE_EVERY_ITERS = -1
 # set to 0 to disable periodically saving model
 SAVE_MODEL_EVERY_ITERS = 1000
 
-VERBOSITY_LEVEL = 1 # 0, 1, 2
+VERBOSITY_LEVEL = 0 # 0, 1, 2
 
 GRIFFIN_LIM_MAX_ITERS_PREVIEW = 0
 GRIFFIN_LIM_MAX_ITERS_SAVING = 0
 
+# Hyperparameters
+LR = 0.001
+BETA = 0.9
+
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
 # an error!
-GEN_MODE = 6            # 0 = RNNConv/Hilbert mode
-                        # 1 = RNNConv/Audio mode
-                        # 2 = Conv/Hilbert mode
+GEN_MODE = 6            # 0 = TBI
+                        # 1 = TBI
+                        # 2 = TBI
                         # 3 = Conv/Audio mode
-                        # 4 = Conv/Mel mode
-                        # 5 = Conv/STFT mode
-                        # 6 = Conv/"Specgram" mode (A specgram is a tensor of log magnitudes and instantaneous frequencies with format [1, 2, time])
+                        # 4 = Conv/Mel mode (WIP)
+                        # 5 = Conv/STFT "Specgram" mode ([2, bin, frame]) (WIP)
+                        # 6 = Conv/Hilbert "Specgram" mode ([1, 2, time])
                         # 10 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
 SAMPLE_RATE = 22050
 GEN_SAMPLE_RATE_FACTOR = 1
 SUBTYPE = 'PCM_16'
 INPUT_DURATION = 8 / SAMPLE_RATE
-OUTPUT_DURATION = 2**16 / SAMPLE_RATE
+OUTPUT_DURATION = 3
 
-GEN_SCALE_LIN = 8          # higher = more memory, must be 1 or greater
-GEN_KERNEL_SIZE_UPSCALING = 555    # higher = more memory, supposedly odd numbers work better
-GEN_STRIDE_UPSCALING = 3      # higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
-GEN_KERNEL_SIZE_DOWNSCALING = 513   # higher = more memory, supposedly odd numbers work better
-GEN_STRIDE_DOWNSCALING = 2          # must be 1 or greater
-MIN_N_GEN_LAYERS = 20
+GEN_SCALE_LIN = 4          # higher = more memory, must be 1 or greater
+GEN_KERNEL_SIZE_UPSCALING = 53    # higher = more memory, supposedly odd numbers work better
+GEN_STRIDE_UPSCALING = 8      # higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
+GEN_KERNEL_SIZE_DOWNSCALING = 13   # higher = more memory, supposedly odd numbers work better
+GEN_STRIDE_DOWNSCALING = 1          # must be 1 or greater
+MIN_N_GEN_LAYERS = 1
 
 # Audio mode only
 N_CHANNELS = 1
@@ -83,31 +87,23 @@ TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
 # Non-CSound mode only
 BATCH_SIZE = 1 # also a power of 2, lower = more efficient but lower quality (currently broken, leave at 2)
 
-# Hyperparameters
-GENERATOR_LR = 0.0001
-GENERATOR_BETA = 0.5
-
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/dis_ckpts folder or the discsriminator model will give
 # an error!
 INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
                         # 'conv' = comparison of example and convolved example result
-DIS_MODE = 3            # 0 = Direct mode
+DIS_MODE = 2            # 0 = Direct mode
                         # 1 = FFT mode
                         # 2 = Mel mode
                         # 3 = Specgram mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
-N_DIS_LAYERS = 4
-DIS_STRIDE = 4
-DIS_KERNEL_SIZE = 1
+DIS_MAX_CHANNELS = 16
+DIS_STRIDE = 2
+DIS_KERNEL_SIZE = 2
 DIS_N_FFT = VIS_N_FFT
 DIS_N_MELS = N_GEN_MEL_CHANNELS
 DIS_HOP_LEN = VIS_HOP_LEN
-
-# Hyperparameters
-DISCRIMINATOR_LR = 0.0001
-DISCRIMINATOR_BETA = 0.5
 
 
 

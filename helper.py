@@ -89,7 +89,7 @@ def find_shape_from(actual, exp_batches, exp_channels, exp_timesteps):
 #         delta = t.shape[0] - size
 #         if delta < 0:
 #         if type(t) == torch.Tensor:
-#             t = torch.cat((t, torch.zeros(-delta).to(0)))
+#             t = torch.cat((t, torch.zeros(-delta)))
 #         else:
 #             t = np.concatenate((t, np.zeros(-delta)))
 #         elif delta > 0:
@@ -98,7 +98,7 @@ def find_shape_from(actual, exp_batches, exp_channels, exp_timesteps):
 #         delta = t.shape[1]*channels - size
 #         if delta < 0:
 #             if type(t) == torch.Tensor:
-#                 t = torch.tensor([torch.cat(t[i], torch.zeros(t[i].shape[0])) for i in range(channels)]).to(0)
+#                 t = torch.tensor([torch.cat(t[i], torch.zeros(t[i].shape[0])) for i in range(channels)])
 #             else:
 #                 t = [np.concatenate(t[i], np.zeros(len(t[i]))) for i in range(channels)]
 #         elif delta > 0:
@@ -115,7 +115,7 @@ class DataBatchPrep(Function):
         #ctx.save_for_backward(torch.empty_like(inp))
         ctx.save_for_backward(inp)
         inp_ = inp.detach()
-        return inp.new(prep_data_for_batch_operation(inp_, exp_batches, exp_channels, exp_timesteps, greedy=False, return_shape=False).to(inp.device))
+        return inp.new(prep_data_for_batch_operation(inp_, exp_batches, exp_channels, exp_timesteps, greedy=False, return_shape=False))
     @staticmethod
     def backward(ctx, grad_output):
         if grad_output is None:
@@ -139,24 +139,24 @@ def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, g
                     b, c, s = find_shape_from(actual+delta, exp_batches, exp_channels, exp_timesteps)
                 except:
                     pass
-            t = torch.cat((t, torch.zeros(delta).to(0)))
+            t = torch.cat((t, torch.zeros(delta)))
         else:
             raise e
     if greedy:
         if return_shape:
-            return torch.reshape(torch.as_tensor(t).to(0), (b, c, s)), delta, (b,c,s)
+            return torch.reshape(torch.as_tensor(t), (b, c, s)), delta, (b,c,s)
         else:
-            return torch.reshape(torch.as_tensor(t).to(0), (b, c, s)), delta
+            return torch.reshape(torch.as_tensor(t), (b, c, s)), delta
     else:
         if return_shape:
-            return torch.reshape(torch.as_tensor(t).to(0), (b, c, s)), (b,c,s)
+            return torch.reshape(torch.as_tensor(t), (b, c, s)), (b,c,s)
         else:
-            return torch.reshape(torch.as_tensor(t).to(0), (b, c, s))
+            return torch.reshape(torch.as_tensor(t), (b, c, s))
 #return tf.reshape(t, (N_BATCHES, 2, 1))
 def normalize_audio(audio):
     return F.normalize(audio.flatten(), dim=0)
 def normalize_data(tensor):
-    return tensor/tensor.abs().max()
+    return tensor/(tensor.abs().max() + EPSILON)
 def write_normalized_audio_to_disk(sig, fn):
     sig_numpy = librosa.util.normalize(sig.clone().detach().cpu().numpy())
     #scaled = np.int16(sig_numpy * 32767)
@@ -177,7 +177,7 @@ def unwrap_pytorch(p, discont=np.pi, dim=-1):
     """
     dd = diff_pytorch(p, dim=dim)
     ddmod = (dd + np.pi) % (2.0 * np.pi) - np.pi
-    idx = torch.logical_and(torch.eq(ddmod, -np.pi * torch.ones_like(ddmod).to(ddmod.device)), torch.greater(dd, torch.zeros_like(dd).to(dd.device)))
+    idx = torch.logical_and(torch.eq(ddmod, -np.pi * torch.ones_like(ddmod)), torch.greater(dd, torch.zeros_like(dd)))
     ddmod = torch.where(idx, torch.ones_like(ddmod) * np.pi, ddmod)
     ph_correct = ddmod - dd
     idx = torch.less(torch.abs(dd), discont)
@@ -186,8 +186,8 @@ def unwrap_pytorch(p, discont=np.pi, dim=-1):
 
     shape = list(p.shape)
     shape[dim] = 1
-    ph_cumsum = torch.cat([torch.zeros(shape, dtype=p.dtype).to(ph_cumsum.device), ph_cumsum], dim=dim)
-    unwrapped = p + ph_cumsum[:p.shape[-1]]
+    ph_cumsum = torch.cat([torch.zeros(shape, dtype=p.dtype), ph_cumsum], dim=dim)
+    unwrapped = p + ph_cumsum[..., :p.shape[-1]]
     return unwrapped
 
 def inst_freq(p):
@@ -223,11 +223,11 @@ def inst_freq_pytorch_2(phase_angle, time_dim=-1, use_unwrap=True):
     begin = [0 for unused_s in size]
     phase_slice = torch.narrow(phase_angle, dim=0, start=0, length=size[0])
     dphase = torch.cat((phase_slice, dphase), dim=time_dim) / np.pi
-    return dphase
+    return dphase[1:]
 
 def polar_to_rect(mag, phase_angle):
     mag = torch.complex(mag, torch.zeros(1, dtype=mag.dtype).to(mag.device))
-    phase = torch.complex(torch.cos(phase_angle), torch.sin(phase_angle)).to(mag.device)
+    phase = torch.complex(torch.cos(phase_angle), torch.sin(phase_angle))
     return mag * phase
 
 # def stft_to_specgram(stft):
@@ -263,7 +263,14 @@ def hilbert_from_scratch_pytorch(u):
     if torch.isnan(v[0]):
         #raise RuntimeError
         pass
-    return v.to(0)
+    return v
+
+def stftgram_to_stft(stftgram):
+    mag = stftgram[0]
+    p = stftgram[1]
+    phase_angle = torch.cumsum(p * np.pi, -1)
+    #phase_angle = p * np.pi
+    return polar_to_rect(mag, phase_angle)
 
 def specgram_to_fft(specgram):
     mag = specgram[0]
@@ -272,18 +279,46 @@ def specgram_to_fft(specgram):
     #phase_angle = p * np.pi
     return polar_to_rect(mag, phase_angle)
 
+def audio_to_stftgram(audio, n_fft, hop_len):
+    stft = torch.stft(audio, n_fft, hop_len, return_complex=True).requires_grad_(True)
+    if torch.is_grad_enabled():
+        stft.retain_grad()
+    a = torch.abs(stft)
+    p = torch.atan2(stft.imag, stft.real).requires_grad_(True)
+    if torch.is_grad_enabled():
+        a.retain_grad()
+        p.retain_grad()
+    f = inst_freq_pytorch_2(p, use_unwrap=False).requires_grad_(True)
+    if torch.is_grad_enabled():
+        f.retain_grad()
+    return torch.stack((a, f), dim=0).requires_grad_(True)
+
+def stftgram_to_audio(stftgram, hop_len):
+    stft = stftgram_to_stft(stftgram).requires_grad_(True)
+    if torch.is_grad_enabled():
+        stft.retain_grad()
+    out = torch.istft(stft, stft.shape[0], hop_len, return_complex=False).requires_grad_(True)
+    if torch.is_grad_enabled():
+        out.retain_grad()
+    return out
+
 def audio_to_specgram(audio):
     ana = hilbert_from_scratch_pytorch(audio)
-    #stft = torch.from_numpy(librosa.stft(audio.detach().clone().cpu().numpy(), n_fft=n_fft, hop_length=hop_len)).to(audio.device)
     a = torch.abs(ana)
     p = torch.atan2(ana.imag, ana.real)
-    f = inst_freq_pytorch_2(p, use_unwrap=False)[1:]
-    return torch.stack((a, f), dim=0).to(audio.device)
+    f = inst_freq_pytorch_2(p, use_unwrap=False)
+    return torch.stack((a, f), dim=0)
 
 def specgram_to_audio(specgram):
-    fft = specgram_to_fft(specgram)
-    invhilb = hilbert_from_scratch_pytorch(fft*-1)
-    out = torch.imag(invhilb).to(specgram.device)
+    fft = specgram_to_fft(specgram).requires_grad_(True)
+    if torch.is_grad_enabled():
+        fft.retain_grad()
+    invhilb = hilbert_from_scratch_pytorch(fft*-1).requires_grad_(True)
+    if torch.is_grad_enabled():
+        invhilb.retain_grad()
+    out = torch.imag(invhilb).requires_grad_(True)
+    if torch.is_grad_enabled():
+        out.retain_grad()
     if torch.isnan(out[0]):
         #raise RuntimeError
         pass
@@ -297,7 +332,7 @@ class STFTToSpecgramWithGradients(Function):
         ctx.save_for_backward(p)
         specgram = stft_to_specgram(p_)
         #melspec = MelSpectrogram(SAMPLE_RATE, n_fft, hop_length=1, n_mels=n_mels)(p_)
-        return p.new(specgram.to(p.device))
+        return p.new(specgram)
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -330,7 +365,7 @@ class AudioToStftWithGradients(Function):
         ctx.save_for_backward(p)
         stft = torch.from_numpy(librosa.stft(p_, n_fft=n_fft, hop_length=hop_len, center=True))
         #melspec = MelSpectrogram(SAMPLE_RATE, n_fft, hop_length=1, n_mels=n_mels)(p_)
-        return p.new(stft.to(p.device))
+        return p.new(stft)
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -342,7 +377,7 @@ class AudioToStftWithGradients(Function):
 class AudioToMelWithGradients(Function):
     @staticmethod
     def forward(ctx, p, n_fft, n_mels, hop_len, power=2):
-        p_ = p.detach().clone().cpu().float().numpy()
+        p_ = p.detach().clone().squeeze().cpu().float().numpy()
         #stft = librosa.stft(p_, n_fft=n_fft)
         ctx.save_for_backward(p)
         stft = librosa.stft(p_, n_fft=n_fft, hop_length=hop_len)
@@ -366,7 +401,7 @@ def stft_to_audio(stft, hop_len, n_iter):
     else:
         print("Inverse STFT: Taking ISTFT...")
         audio = librosa.istft(stft_, hop_length=hop_len, center=True)
-    return torch.from_numpy(audio).to(stft.device)
+    return torch.from_numpy(audio).to(audio.deive)
 
 class MelToSTFTWithGradients(Function):
     @staticmethod
@@ -403,7 +438,7 @@ class MelToSTFTWithGradients(Function):
         #mel_filters = torchaudio.functional.create_fb_matrix(n_fft, 0, SAMPLE_RATE//2, n_mels, SAMPLE_RATE)
         #mel_filters = librosa.filters.mel(SAMPLE_RATE, n_fft, n_mels)
         #stft = torch.tensordot(B.transpose(-1,-2), mel_filters, 1)
-        return p.new(stft.to(p.device).to(p.dtype))
+        return p.new(stft.to(p.dtype))
 
     @staticmethod
     def backward(ctx, grad_output):

@@ -12,3 +12,5 @@ x64/*
 .vscode/*
 .user
 .filters
+lightning_logs/*
+__pycache__/*
