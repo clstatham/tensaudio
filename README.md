@@ -1,5 +1,5 @@
 # tensaudio
- Experiments with TensorFlow and audio.
+ Experiments with TensorFlow/PyTorch and audio.
 
 Change the paths defined in global_constants.py before running!
 
