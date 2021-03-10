@@ -10,6 +10,8 @@ from torchaudio.transforms import InverseMelScale, MelSpectrogram, GriffinLim
 import torch.nn.functional as F
 from torch.autograd import Function
 
+from torchlibrosa import STFT, ISTFT
+
 import numba
 import scipy
 import scipy.optimize
@@ -193,7 +195,10 @@ def unwrap_pytorch(p, discont=np.pi, dim=-1):
 def inst_freq(p):
     return np.diff(p) / (2.0*np.pi) * len(p)
 def inst_freq_pytorch(p, time_dim=-1):
-    return  diff_pytorch(p) / (2.0*np.pi * p.size(time_dim))
+    dphase = diff_pytorch(p, dim=time_dim)
+    dphase = torch.where(dphase > np.pi, dphase - 2 * np.pi, dphase)
+    dphase = torch.where(dphase < -np.pi, dphase + 2 * np.pi, dphase)
+    return dphase
 def inst_freq_pytorch_2(phase_angle, time_dim=-1, use_unwrap=True):
     """Transform a fft tensor from phase angle to instantaneous frequency.
     Take the finite difference of the phase. Pad with initial phase to keep the
@@ -250,9 +255,9 @@ def hilbert_from_scratch_pytorch(u):
     # U : DFT of u
     # v : IDFT of H(U)
 
-    N = len(u.flatten())
+    N = len(u.view(-1))
     # take forward Fourier transform
-    U = torch.fft.fft(u.flatten())
+    U = torch.fft.fft(u.view(-1))
     M = N - N//2 - 1
     # zero out negative frequency components
     U[N//2+1:] = torch.zeros(M)
@@ -261,68 +266,91 @@ def hilbert_from_scratch_pytorch(u):
     # take inverse Fourier transform
     v = torch.fft.ifft(U)
     if torch.isnan(v[0]):
-        #raise RuntimeError
+        raise RuntimeError
         pass
     return v
 
 def stftgram_to_stft(stftgram):
-    mag = stftgram[0]
-    p = stftgram[1]
-    phase_angle = torch.cumsum(p * np.pi, -1)
-    #phase_angle = p * np.pi
+    mag = stftgram[0].squeeze()
+    p = stftgram[1].squeeze()
+    #phase_angle = torch.cumsum(p * np.pi, -1)
+    phase_angle = p * np.pi
     return polar_to_rect(mag, phase_angle)
 
 def specgram_to_fft(specgram):
     mag = specgram[0]
     p = specgram[1]
-    phase_angle = torch.cumsum(p * np.pi, -1)
-    #phase_angle = p * np.pi
+    #phase_angle = torch.cumsum(p * np.pi, -1)
+    phase_angle = p * np.pi
     return polar_to_rect(mag, phase_angle)
 
 def audio_to_stftgram(audio, n_fft, hop_len):
-    stft = torch.stft(audio, n_fft, hop_len, return_complex=True).requires_grad_(True)
-    if torch.is_grad_enabled():
-        stft.retain_grad()
-    a = torch.abs(stft)
-    p = torch.atan2(stft.imag, stft.real).requires_grad_(True)
-    if torch.is_grad_enabled():
-        a.retain_grad()
-        p.retain_grad()
-    f = inst_freq_pytorch_2(p, use_unwrap=False).requires_grad_(True)
-    if torch.is_grad_enabled():
-        f.retain_grad()
-    return torch.stack((a, f), dim=0).requires_grad_(True)
+    out = []
+    for batch in audio:
+        real, imag = STFT(n_fft, hop_len).to(audio.device)(batch.unsqueeze(0))
+        if torch.is_grad_enabled():
+            real.requires_grad_(True)
+            imag.requires_grad_(True)
+            real.retain_grad()
+            imag.retain_grad()
+        a = torch.abs(polar_to_rect(real, imag))
+        p = torch.atan2(imag, real).requires_grad_(True)
+        if torch.is_grad_enabled():
+            a.retain_grad()
+            p.retain_grad()
+        #f = inst_freq_pytorch(p).requires_grad_(True)
+        p = p / np.pi
+        #if torch.is_grad_enabled():
+        #    f.retain_grad()
+        out.append(torch.stack((a.squeeze().permute(1,0), p.squeeze().permute(1,0)), dim=0).requires_grad_(True).to(audio.device))
+    return torch.stack(out).requires_grad_(True)
 
 def stftgram_to_audio(stftgram, hop_len):
-    stft = stftgram_to_stft(stftgram).requires_grad_(True)
-    if torch.is_grad_enabled():
-        stft.retain_grad()
-    out = torch.istft(stft, stft.shape[0], hop_len, return_complex=False).requires_grad_(True)
-    if torch.is_grad_enabled():
-        out.retain_grad()
-    return out
+    out = []
+    for batch in stftgram:
+        stft = stftgram_to_stft(batch).requires_grad_(True).permute(1,0).unsqueeze(0).unsqueeze(0)
+        if torch.is_grad_enabled():
+            stft.retain_grad()
+        out.append(ISTFT(2*(stft.shape[-1]-1), hop_len).to(stftgram.device)(stft.real, stft.imag, TOTAL_SAMPLES_OUT).to(stftgram.device).squeeze())
+    return torch.stack(out).requires_grad_(True)
 
 def audio_to_specgram(audio):
-    ana = hilbert_from_scratch_pytorch(audio)
-    a = torch.abs(ana)
-    p = torch.atan2(ana.imag, ana.real)
-    f = inst_freq_pytorch_2(p, use_unwrap=False)
-    return torch.stack((a, f), dim=0)
+    out = []
+    for batch in audio:
+        ana = hilbert_from_scratch_pytorch(batch)
+        a = torch.abs(ana)
+        p = torch.atan2(ana.imag, ana.real) / np.pi
+        #f = inst_freq_pytorch_2(p, use_unwrap=False)
+        out.append(torch.stack((a, p), dim=0))
+    return torch.stack(out)
 
 def specgram_to_audio(specgram):
-    fft = specgram_to_fft(specgram).requires_grad_(True)
-    if torch.is_grad_enabled():
-        fft.retain_grad()
-    invhilb = hilbert_from_scratch_pytorch(fft*-1).requires_grad_(True)
-    if torch.is_grad_enabled():
-        invhilb.retain_grad()
-    out = torch.imag(invhilb).requires_grad_(True)
-    if torch.is_grad_enabled():
-        out.retain_grad()
-    if torch.isnan(out[0]):
-        #raise RuntimeError
-        pass
-    return out
+    out = []
+    for batch in specgram:
+        fft = specgram_to_fft(batch).requires_grad_(True)
+        if torch.is_grad_enabled():
+            fft.retain_grad()
+        invhilb = hilbert_from_scratch_pytorch(-fft).requires_grad_(True)
+        if torch.is_grad_enabled():
+            invhilb.retain_grad()
+        out.append(torch.imag(invhilb).requires_grad_(True))
+    return torch.stack(out)
+
+class STFTToAudioWithGradients(Function):
+    @staticmethod
+    def forward(ctx, p, hop_len):
+        p_ = p.detach().clone().cpu().numpy()
+        ctx.save_for_backward(p)
+        ctx.mark_dirty(p)
+        p = torch.from_numpy(librosa.istft(p_, hop_length=hop_len, center=True)).to(p.device)
+        return p
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        if grad_output is None:
+            return None, None
+        #numpy_go = grad_output.cpu().numpy()
+        return ctx.saved_tensors[0], None
 
 class STFTToSpecgramWithGradients(Function):
     @staticmethod
@@ -378,13 +406,15 @@ class AudioToMelWithGradients(Function):
     @staticmethod
     def forward(ctx, p, n_fft, n_mels, hop_len, power=2):
         p_ = p.detach().clone().squeeze().cpu().float().numpy()
-        #stft = librosa.stft(p_, n_fft=n_fft)
         ctx.save_for_backward(p)
-        stft = librosa.stft(p_, n_fft=n_fft, hop_length=hop_len)
-        melspec = librosa.feature.melspectrogram(S=np.abs(stft), sr=SAMPLE_RATE, n_mels=n_mels, power=power, center=True)
-        melspec = torch.from_numpy(melspec)
+        result = []
+        for batch in p_:
+        #stft = librosa.stft(p_, n_fft=n_fft)
+            stft = librosa.stft(batch, n_fft=n_fft, hop_length=hop_len)
+            melspec = librosa.feature.melspectrogram(S=np.abs(stft), sr=SAMPLE_RATE, n_mels=n_mels, power=power, center=True)
+            result.append(torch.from_numpy(melspec))
         #melspec = MelSpectrogram(SAMPLE_RATE, n_fft, hop_length=1, n_mels=n_mels)(p_)
-        return p.new(melspec.to(p.device))
+        return p.new(torch.stack(result).to(p.device))
 
     @staticmethod
     def backward(ctx, grad_output):

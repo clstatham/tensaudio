@@ -1,7 +1,4 @@
 RESOURCES_DIR = "C:\\tensaudio_resources\\"
-EXAMPLES_DIR = "fire"
-EXAMPLE_RESULTS_DIR = "akwf"
-INPUTS_DIR = "inputs_kicks"
 
 PLOTS_DIR = "D:\\tensaudio_plots\\"
 TRAINING_DIR = "D:\\tensaudio_training\\"
@@ -9,36 +6,31 @@ TRAINING_DIR = "D:\\tensaudio_training\\"
 MODEL_DIR = "D:\\tensaudio_models\\"
 
 # must be divisible by 100
-VIS_WIDTH = 800
-VIS_HEIGHT = 600
+VIS_WIDTH = 1600
+VIS_HEIGHT = 900
 
-VIS_UPDATE_INTERVAL = 10 # iterations
+VIS_UPDATE_INTERVAL = 1 # iterations
 
-VIS_N_FFT = 2048
+VIS_N_FFT = 1024
 VIS_HOP_LEN = VIS_N_FFT//4
-
-EPSILON = 1e-9
-
-# set to 0 to run until visualizer is closed
-MAX_ITERS = 0
-RUN_FOR_SEC = 0
 
 SLEEP_TIME = 0
 MAX_ITERS_PER_SEC = 0
 
-# set to 0 to disable periodically generating progress updates
-SAVE_EVERY_ITERS = -1
-# set to 0 to disable periodically saving model
-SAVE_MODEL_EVERY_ITERS = 1000
+SAVE_EVERY_EPOCH = True
+SAVE_EVERY_BATCHES = 500
 
-VERBOSITY_LEVEL = 0 # 0, 1, 2
+VERBOSITY_LEVEL = 1 # 0, 1, 2
 
 GRIFFIN_LIM_MAX_ITERS_PREVIEW = 0
 GRIFFIN_LIM_MAX_ITERS_SAVING = 0
 
 # Hyperparameters
-LR = 0.001
-BETA = 0.9
+LR = 0.00001
+BETA = 0.5
+GEN_MOMENTUM = 0.01
+
+BATCH_SIZE = 5 # lower = more efficient but lower quality training (must be 2 or greater)
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
@@ -48,22 +40,25 @@ GEN_MODE = 6            # 0 = TBI
                         # 2 = TBI
                         # 3 = Conv/Audio mode
                         # 4 = Conv/Mel mode (WIP)
-                        # 5 = Conv/STFT "Specgram" mode ([2, bin, frame]) (WIP)
-                        # 6 = Conv/Hilbert "Specgram" mode ([1, 2, time])
+                        # 5 = Conv/STFT "Specgram" mode ([batch, 2, bin, frame])
+                        # 6 = Conv/Hilbert "Specgram" mode ([batch, 2, time])
                         # 10 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
-SAMPLE_RATE = 22050
+SAMPLE_RATE = 16000
 GEN_SAMPLE_RATE_FACTOR = 1
 SUBTYPE = 'PCM_16'
-INPUT_DURATION = 8 / SAMPLE_RATE
-OUTPUT_DURATION = 3
+INPUT_DURATION = 1 / SAMPLE_RATE
+OUTPUT_DURATION = 2
 
-GEN_SCALE_LIN = 4          # higher = more memory, must be 1 or greater
+GEN_INITIAL_LIN_SCALE = 32          # higher = more memory, must be 1 or greater
+GEN_MAX_LIN_FEATURES = 4096
 GEN_KERNEL_SIZE_UPSCALING = 53    # higher = more memory, supposedly odd numbers work better
-GEN_STRIDE_UPSCALING = 8      # higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
-GEN_KERNEL_SIZE_DOWNSCALING = 13   # higher = more memory, supposedly odd numbers work better
+GEN_STRIDE_UPSCALING = 16      # higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
+GEN_KERNEL_SIZE_DOWNSCALING = 53   # higher = more memory, supposedly odd numbers work better
 GEN_STRIDE_DOWNSCALING = 1          # must be 1 or greater
-MIN_N_GEN_LAYERS = 1
+GEN_MIN_LAYERS = 1
+GEN_MAX_CHANNELS = 512
+GEN_PHASE_SHUFFLE = 0.005
 
 # Audio mode only
 N_CHANNELS = 1
@@ -84,9 +79,6 @@ KONTROL_SAMPLES = 64
 PARAM_UPDATE_SAMPLES = SAMPLE_RATE*OUTPUT_DURATION
 TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
 
-# Non-CSound mode only
-BATCH_SIZE = 1 # also a power of 2, lower = more efficient but lower quality (currently broken, leave at 2)
-
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/dis_ckpts folder or the discsriminator model will give
 # an error!
@@ -98,9 +90,9 @@ DIS_MODE = 2            # 0 = Direct mode
                         # 3 = Specgram mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
-DIS_MAX_CHANNELS = 16
+DIS_MAX_CHANNELS = 2
 DIS_STRIDE = 2
-DIS_KERNEL_SIZE = 2
+DIS_KERNEL_SIZE = 1
 DIS_N_FFT = VIS_N_FFT
 DIS_N_MELS = N_GEN_MEL_CHANNELS
 DIS_HOP_LEN = VIS_HOP_LEN
@@ -115,18 +107,19 @@ DIS_HOP_LEN = VIS_HOP_LEN
 # ---------------------------------------------------------------------------------
 
 import numpy as np
-import curses
 import librosa
+
+EPSILON = 1e-9
 
 TOTAL_SAMPLES_IN = int(SAMPLE_RATE * INPUT_DURATION)
 TOTAL_SAMPLES_OUT = int(SAMPLE_RATE * OUTPUT_DURATION)
-N_BATCHES = int(TOTAL_SAMPLES_OUT // BATCH_SIZE)
-if TOTAL_SAMPLES_OUT % BATCH_SIZE != 0:
-    raise ValueError("Could not calculate N_BATCHES: Total length of audio not divisible by", (BATCH_SIZE))
-N_TIMESTEPS_PER_KERNEL = int(SAMPLE_RATE*OUTPUT_DURATION // (GEN_KERNEL_SIZE_DOWNSCALING * N_BATCHES))
-SAMPLES_PER_BATCH = int(TOTAL_SAMPLES_OUT // N_BATCHES)
-if TOTAL_SAMPLES_OUT % N_BATCHES != 0:
-    raise ValueError("Could not calculate SAMPLES_PER_BATCH: Total length of audio not divisible by", N_BATCHES)
+#N_BATCHES = int(TOTAL_SAMPLES_OUT // BATCH_SIZE)
+#if TOTAL_SAMPLES_OUT % BATCH_SIZE != 0:
+#    raise ValueError("Could not calculate N_BATCHES: Total length of audio not divisible by", (BATCH_SIZE))
+#N_TIMESTEPS_PER_KERNEL = int(SAMPLE_RATE*OUTPUT_DURATION // (GEN_KERNEL_SIZE_DOWNSCALING * N_BATCHES))
+#SAMPLES_PER_BATCH = int(TOTAL_SAMPLES_OUT // N_BATCHES)
+#if TOTAL_SAMPLES_OUT % N_BATCHES != 0:
+#    raise ValueError("Could not calculate SAMPLES_PER_BATCH: Total length of audio not divisible by", N_BATCHES)
 KONTROL_SECONDS = KONTROL_SAMPLES/SAMPLE_RATE
 
 GEN_N_FRAMES = librosa.samples_to_frames(TOTAL_SAMPLES_OUT, GEN_HOP_LEN, N_GEN_FFT)
