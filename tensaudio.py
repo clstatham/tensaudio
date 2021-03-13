@@ -33,14 +33,14 @@ from pygame.locals import *
 
 #from csoundinterface import CSIRun, CsoundInterface, G_csi
 from discriminator import TADiscriminator
-from generator import TAGenerator, TAInstParamGenerator
+from generator import TAGenerator, TAInstParamGenerator, he_init
 from global_constants import *
 from helper import *
 from hilbert import *
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 #torch.autograd.set_detect_anomaly(True)
-plt.switch_backend('agg')
+#plt.switch_backend('agg')
 
 np.random.seed(int(round(time.time())))
 torch.random.manual_seed(int(round(time.time())))
@@ -99,14 +99,14 @@ def iterate_and_resample(files, srs):
         arr.append(a[:TOTAL_SAMPLES_OUT].float())
     return arr
 
-class TASadDataset(Dataset):
+class TADataset(Dataset):
     def __init__(self, data_dir):
         super().__init__()
         self.data_dir = data_dir
-        self.filenames = glob.glob(self.data_dir+str("/*.flac"))
+        self.filenames = glob.glob(self.data_dir+str("/*.wav"))
         self.dims = (len(self.filenames))
     def __len__(self):
-        return 1045
+        return len(self.filenames)
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
@@ -129,15 +129,15 @@ class TASadDataset(Dataset):
             audio_resampled = torch.cat((audio_resampled, torch.zeros(TOTAL_SAMPLES_OUT-audio_resampled.shape[0])))
         return audio_resampled.float()[:TOTAL_SAMPLES_OUT].cpu()
 
-class TASadDataModule(pl.LightningDataModule):
+class TADataModule(pl.LightningDataModule):
     def __init__(self, data_dir:str = RESOURCES_DIR, batch_size:int = BATCH_SIZE, num_workers:int = 0):
         super().__init__()
-        self.data_dir = os.path.join(data_dir, "Musical Emotions Classification", "Sad")
+        self.data_dir = os.path.join(data_dir, DATASET_DIRNAME)
         self.batch_size = batch_size
         self.num_workers = num_workers
 
     def setup(self, stage=None):
-        self.set = TASadDataset(self.data_dir)
+        self.set = TADataset(self.data_dir)
     def train_dataloader(self):
         return DataLoader(self.set, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
     def test_dataloader(self):
@@ -153,14 +153,27 @@ def generate_input_noise():
     elif GEN_MODE in [5]:
         return torch.randn(BATCH_SIZE, 2, 2, TOTAL_SAMPLES_IN, requires_grad=True)
     elif GEN_MODE in [6]:
-        return torch.randn(BATCH_SIZE, 2, TOTAL_SAMPLES_IN, requires_grad=True)
+        return torch.randn(BATCH_SIZE, 1, TOTAL_SAMPLES_IN, requires_grad=True)
     else:
         return torch.randn(BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True)
     
+
+def random_phase_shuffle(inp, chance, scale):
+    out = inp.clone()
+    second_half = inp.shape[1] // 2
+    noise = normalize_negone_one(torch.randn((inp.shape[0], inp.shape[1]-second_half, *inp.shape[2:])).to(inp.device)) \
+        * scale * inp[:,second_half:].abs().max()
+    noise = F.dropout(noise, 1 - chance, True, False)
+    out[:,second_half:] = inp[:,second_half:] + noise
+    return out
+
 def weights_init(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
-        nn.init.normal_(m.weight.data, 0.0, 0.02)
+        pass
+        #nn.init.kaiming_uniform_(m.weight.data)
+        #nn.init.xavier_normal_(m.weight.data, 0.0821) #nn.init.xavier_normal_(m.weight.data, 0.0821)
+        #m.weight.data.copy_(he_init(m.weight.data))
     elif classname.find('BatchNorm') != -1:
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
@@ -191,7 +204,7 @@ class MyEarlyStopping(EarlyStopping):
 global VIS_qlock
 
 class TAMetricsPlotter():
-    def __init__(self, grid_tick_interval=BATCH_SIZE):
+    def __init__(self, grid_tick_interval):
         self.vis_queue = mp.Queue()
         self.total_gen_losses = []
         self.total_dis_losses = []
@@ -205,7 +218,10 @@ class TAMetricsPlotter():
         self.pg_surface = pygame.display.set_mode((VIS_WIDTH, VIS_HEIGHT))
         self.pg_clk = pygame.time.Clock()
 
-        self.grid_tick_interval = 1045 // BATCH_SIZE # every epoch
+        self.start_time = datetime.now().strftime("%d.%m.%Y_%H.%M")
+
+        #self.grid_tick_interval = 1045 // BATCH_SIZE # every epoch
+        self.grid_tick_interval = grid_tick_interval
         self.graph_x_limit = 20*self.grid_tick_interval
 
     def put_queue(self, val):
@@ -223,14 +239,14 @@ class TAMetricsPlotter():
             self.total_dis_losses.append(metrics['dis_loss'].detach().cpu().item())
             self.total_real_verdicts.append(metrics['real_verdict'].detach().cpu().item())
             self.total_fake_verdicts.append(metrics['fake_verdict'].detach().cpu().item())
-            if len(self.total_gen_losses) > self.graph_x_limit:
-                self.total_gen_losses = self.total_gen_losses[1:]
-            if len(self.total_dis_losses) > self.graph_x_limit:
-                self.total_dis_losses = self.total_dis_losses[1:]
-            if len(self.total_real_verdicts) > self.graph_x_limit:
-                self.total_real_verdicts = self.total_real_verdicts[1:]
-            if len(self.total_fake_verdicts) > self.graph_x_limit:
-                self.total_fake_verdicts = self.total_fake_verdicts[1:]
+            # if len(self.total_gen_losses) > self.graph_x_limit:
+            #     self.total_gen_losses = self.total_gen_losses[1:]
+            # if len(self.total_dis_losses) > self.graph_x_limit:
+            #     self.total_dis_losses = self.total_dis_losses[1:]
+            # if len(self.total_real_verdicts) > self.graph_x_limit:
+            #     self.total_real_verdicts = self.total_real_verdicts[1:]
+            # if len(self.total_fake_verdicts) > self.graph_x_limit:
+            #     self.total_fake_verdicts = self.total_fake_verdicts[1:]
             
             try:
                 self.current_output = metrics['test'].detach().cpu().numpy()
@@ -261,11 +277,17 @@ class TAMetricsPlotter():
     def plot_metrics(self, save_to_disk=False):
         self.pg_surface.fill((255,255,255))
 
-        timestamp = str(datetime.now().strftime("%d.%m.%Y_%H.%M.%S"))
+        timestamp = str(self.start_time)
         dirname = os.path.join(PLOTS_DIR, timestamp)
 
-        filename3 = str('LOSSES_'+timestamp+'.png')
-        filename4 = str('SPECTROGRAMS_'+timestamp+'.png')
+        filename3 = str(str(datetime.now().strftime("%H.%M.%S"))+'_LOSSES.png')
+        filename4 = str(str(datetime.now().strftime("%H.%M.%S"))+'_SPECTROGRAMS.png')
+
+        if save_to_disk:
+            try:
+                os.mkdir(dirname)
+            except:
+                pass
 
         if len(self.total_gen_losses) + len(self.total_dis_losses) + len(self.total_real_verdicts) + len(self.total_fake_verdicts) > 0:
             fig3, (ax1, ax2, ax3) = plt.subplots(3,1, figsize=[VIS_WIDTH//100,VIS_HEIGHT//50], dpi=50, facecolor="white")
@@ -297,47 +319,49 @@ class TAMetricsPlotter():
             canvas.draw()
             renderer = canvas.get_renderer()
             plots_img = renderer.tostring_rgb()
-            
             size_plots = canvas.get_width_height()
-            
-
             surf_plots = pygame.image.fromstring(plots_img, size_plots, "RGB")
             self.pg_surface.blit(surf_plots, (0,0))
-            #spec_out = librosa.feature.melspectrogram(current_output, SAMPLE_RATE, n_fft=N_FFT, hop_length=64)
-            #librosa.display.specshow(librosa.power_to_db(spec_out, ref=np.max), y_axis='mel', fmax=SAMPLE_RATE/2, x_axis='time')
-            #out_spec_fig = plt.figure(figsize=[VIS_WIDTH//100, VIS_HEIGHT//50], dpi=50)
-            if self.current_validation is not None and self.current_output is not None:
-                out_spec_fig, (spec_ax3, spec_ax4) = plt.subplots(2, 1, figsize=[VIS_WIDTH//100, VIS_HEIGHT//50], dpi=50, facecolor="white")
-                out_spec_fig.subplots_adjust(hspace=0.1, wspace=0.1, left=0.05, bottom=0.05, right=0.95, top=0.95)
 
-                spec_ax3.set_title('Output')
-                spec_ax4.set_title('Progress')
-                spec_ax3.specgram(self.current_output, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap=plt.get_cmap('magma'))
-                spec_ax4.specgram(self.current_validation, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap=plt.get_cmap('magma'))
-                
-                canvas = agg.FigureCanvasAgg(out_spec_fig)
-                canvas.draw()
-                renderer = canvas.get_renderer()
-                out_spec_img = renderer.tostring_rgb()
-                size_out_spec_img = canvas.get_width_height()
-                plt.close()
-                out_spec_surf = pygame.image.fromstring(out_spec_img, size_out_spec_img, "RGB")
-                self.pg_surface.blit(out_spec_surf, (VIS_WIDTH//2, 0))
-            
+            if save_to_disk:
+                fig3.savefig(os.path.join(dirname, filename3))
             plt.close()
-            pygame.display.flip()
+        
+        if self.current_validation is not None and self.current_output is not None:
+            out_spec_fig, (spec_ax3, spec_ax4) = plt.subplots(2, 1, figsize=[VIS_WIDTH//100, VIS_HEIGHT//50], dpi=50, facecolor="white")
+            out_spec_fig.subplots_adjust(hspace=0.1, wspace=0.1, left=0.05, bottom=0.05, right=0.95, top=0.95)
 
-            # if save_to_disk:
-            #     os.mkdir(dirname)
-            #     fig3.savefig(os.path.join(dirname, filename3))
-            #     out_spec_fig.savefig(os.path.join(dirname, filename4))
+            spec_ax3.set_title('Output')
+            spec_ax4.set_title('Progress')
+            spec_ax3.specgram(self.current_output, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap=plt.get_cmap('magma'))
+            spec_ax4.specgram(self.current_validation, VIS_N_FFT, noverlap=VIS_N_FFT//2, mode='psd', cmap=plt.get_cmap('magma'))
+            
+            canvas = agg.FigureCanvasAgg(out_spec_fig)
+            canvas.draw()
+            renderer = canvas.get_renderer()
+            out_spec_img = renderer.tostring_rgb()
+            size_out_spec_img = canvas.get_width_height()
+            
+            out_spec_surf = pygame.image.fromstring(out_spec_img, size_out_spec_img, "RGB")
+            self.pg_surface.blit(out_spec_surf, (VIS_WIDTH//2, 0))
+
+            if save_to_disk:
+                out_spec_fig.savefig(os.path.join(dirname, filename4))
+            plt.close()
+        
+        pygame.display.flip()
+
+        
+            
+            
         yield
 
 global VIS
 
 class TensAudio(pl.LightningModule):
     def __init__(self, 
-        lr: float = LR,
+        glr: float = GEN_LR,
+        dlr: float = DIS_LR,
         b1: float = BETA,
         b2: float = 0.999,
         gm: float = GEN_MOMENTUM,
@@ -351,12 +375,25 @@ class TensAudio(pl.LightningModule):
         print("Creating Discriminator...")
         self.dis = TADiscriminator()
 
-        self.ready_to_stop = 0
-        self.q = mp.Queue()
-        self.log('early_stop_on', self.ready_to_stop, on_step=True, on_epoch=True, prog_bar=False)
+        self.gen.apply(weights_init)
+        #self.dis.apply(weights_init)
 
         self.validation_z = generate_input_noise()
     
+    @property
+    def automatic_optimization(self):
+        return False
+
+    def dis_phase_shuffled(self, z):
+        if len(z.shape) == 3:
+            return self.dis(specgram_to_audio(random_phase_shuffle(z, PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE)))
+        elif len(z.shape) == 2:
+            return self.dis(specgram_to_audio(random_phase_shuffle(audio_to_specgram(z), PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE)))
+        elif len(z.shape) == 1:
+            return self.dis(specgram_to_audio(random_phase_shuffle(audio_to_specgram(z.view(1, -1)), PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE)))
+        else:
+            raise ValueError
+
     def forward(self, z):
         return self.gen(z)
     
@@ -369,100 +406,121 @@ class TensAudio(pl.LightningModule):
         #else:
         #    self.ready_to_stop = self.q.get()
         #self.log('early_stop_on', self.ready_to_stop, on_step=True, on_epoch=True, prog_bar=False)
-
-        #self.zero_grad()
-
-        if optimizer_idx == 0:
-            z = generate_input_noise()
-            gen_output = self(z)
-            with torch.no_grad():
-                dis_output_gen = self.dis(gen_output).requires_grad_(True)
-            valid = torch.full_like(dis_output_gen, REAL_LABEL)
-            valid.type_as(batch)
-            gen_loss = self.loss(valid, dis_output_gen)
-            VIS.put_queue(('gen_loss', gen_loss.detach().cpu()))
-            output = OrderedDict({
-                'loss': gen_loss,
-            })
-            self.log('gen_loss', gen_loss, on_step=True, on_epoch=True, prog_bar=True)
-            
-            return output
+        dis_optim, gen_optim = self.optimizers()
         
-        if optimizer_idx == 1:
-            gen_output = self.gen(generate_input_noise())
-            dis_output_real = self.dis(batch)
-            dis_output_fake = self.dis(gen_output.detach())
-            valid = torch.full_like(dis_output_real, REAL_LABEL)
-            valid.type_as(batch)
-            fake = torch.full_like(dis_output_fake, FAKE_LABEL)
-            fake.type_as(batch)
-            real_loss = self.loss(valid, dis_output_real)
-            fake_loss = self.loss(fake, dis_output_fake)
-            dis_loss = (real_loss + fake_loss) / 2.
-            output = OrderedDict({
-                'loss': dis_loss,
-            })
-            VIS.put_queue(('dis_loss', dis_loss.detach().cpu()))
-            VIS.put_queue(('real_verdict', dis_output_real.mean().detach().cpu()))
-            VIS.put_queue(('fake_verdict', dis_output_fake.mean().detach().cpu()))
-            self.log('dis_loss', dis_loss, on_step=True, on_epoch=True, prog_bar=True)
-            self.log('dis_output_real', dis_output_real.mean(), on_step=True, on_epoch=True, prog_bar=False)
-            self.log('dis_output_fake', dis_output_fake.mean(), on_step=True, on_epoch=True, prog_bar=False)
-            
-            #self.log('early_stop_on', self.ready_to_stop, on_step=True, on_epoch=True, prog_bar=False)
-            return output
+        z = generate_input_noise()
+        z.type_as(batch)
+        gen_output = self(z)
+
+        
+        dis_output_gen = self.dis_phase_shuffled(gen_output).requires_grad_(True)
+        valid = torch.full_like(dis_output_gen, REAL_LABEL)
+        valid.type_as(batch)
+        gen_loss = self.loss(valid, dis_output_gen)
+        gen_optim.zero_grad()
+        self.manual_backward(gen_loss, retain_graph=True)
+        gen_optim.step()
+        
+
+        dis_output_real = self.dis_phase_shuffled(batch)
+        dis_output_fake = self.dis_phase_shuffled(gen_output.detach())
+        valid = torch.full_like(dis_output_real, REAL_LABEL)
+        valid.type_as(batch)
+        fake = torch.full_like(dis_output_fake, FAKE_LABEL)
+        fake.type_as(batch)
+        real_loss = self.loss(valid, dis_output_real)
+        fake_loss = self.loss(fake, dis_output_fake)
+        dis_loss = (real_loss + fake_loss) / 2.
+        dis_optim.zero_grad()
+        self.manual_backward(dis_loss)
+        dis_optim.step()
+
+        VIS.put_queue(('gen_loss', gen_loss.detach().cpu()))
+        VIS.put_queue(('dis_loss', dis_loss.detach().cpu()))
+        VIS.put_queue(('real_verdict', dis_output_real.mean().detach().cpu()))
+        VIS.put_queue(('fake_verdict', dis_output_fake.mean().detach().cpu()))
+        self.log('gen_loss', gen_loss, on_step=True, on_epoch=False, prog_bar=True)
+        self.log('dis_loss', dis_loss, on_step=True, on_epoch=False, prog_bar=True)
+        self.log('dis_output_real', dis_output_real.mean(), on_step=True, on_epoch=False, prog_bar=False)
+        self.log('dis_output_fake', dis_output_fake.mean(), on_step=True, on_epoch=False, prog_bar=False)
         
     def configure_optimizers(self):
-        lr = self.hparams.lr
+        glr = self.hparams.glr
+        dlr = self.hparams.dlr
         b1 = self.hparams.b1
         b2 = self.hparams.b2
         gm = self.hparams.gm
         print("Creating Optimizers...")
-        gen_optim = torch.optim.Adam(self.gen.parameters(), lr=lr, betas=(b1, b2))
-        dis_optim = torch.optim.Adam(self.dis.parameters(), lr=lr, betas=(b1, b2))
-        return [gen_optim, dis_optim], []
+        dis_optim = torch.optim.Adam(self.dis.parameters(), lr=dlr, betas=(b1, b2))
+        gen_optim = torch.optim.Adam(self.gen.parameters(), lr=glr, betas=(b1, b2))
+        return [dis_optim, gen_optim], []
     
-    def generate_progress_report(self, batch_idx=None):
-        gen_output_valid = self(self.validation_z)[0].cpu().detach()
-        VIS.put_queue(('validation', gen_output_valid))
-        gen_output_test = self(generate_input_noise())[0].cpu().detach()
-        VIS.put_queue(('test', gen_output_test))
-
-        dirname = os.path.join(TRAINING_DIR, datetime.now().strftime("%d.%m.%Y"))
-        timestamp = datetime.now().strftime("%H.%M.%S")
-        try:
-            os.mkdir(dirname)
-        except:
-            pass
-        if batch_idx is None:
-            filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_progress"+"_EOE.wav")
-        else:
-            filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_progress"+"_"+str(batch_idx)+".wav")
-        write_normalized_audio_to_disk(gen_output_valid, filename)
-
-        dirname = os.path.join(TRAINING_DIR, datetime.now().strftime("%d.%m.%Y"))
-        try:
-            os.mkdir(dirname)
-        except:
-            pass
-        if batch_idx is None:
-            filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_training"+"_EOE.wav")
-        else:
-            filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_training"+"_"+str(batch_idx)+".wav")
-        write_normalized_audio_to_disk(gen_output_test, filename)
+    def generate_progress_report(self, save=False, batch_idx=None, force_send=False):
+        v, t = None, None
+        if not VIS.paused or force_send:
+            gen_output_valid = self(self.validation_z).cpu().detach()
+            for i, b in enumerate(gen_output_valid):
+                if b.abs().max() > 0:
+                    v = b
+                    VIS.put_queue(('validation', b))
+                    break
+                # else:
+                #     print("Skipping validation mini-batch of zeros", i, ".")
+            
+            gen_output_test = self(generate_input_noise()).cpu().detach()
+            for i, b in enumerate(gen_output_test):
+                if b.abs().max() > 0:
+                    t = b
+                    VIS.put_queue(('test', b))
+                    break
+                # else:
+                #     print("Skipping testing mini-batch of zeros", i, ".")
+        
+        if save:
+            if VIS.paused:
+                gen_output_valid = self(self.validation_z).cpu().detach()
+                for b in gen_output_valid:
+                    if b.abs().max() > 0:
+                        v = b
+                        break
+                
+                gen_output_test = self(generate_input_noise()).cpu().detach()
+                for b in gen_output_test:
+                    if b.abs().max() > 0:
+                        t = b
+                        break
+            dirname = os.path.join(TRAINING_DIR, datetime.now().strftime("%d.%m.%Y"))
+            timestamp = datetime.now().strftime("%H.%M.%S")
+            if v is not None:
+                try:
+                    os.mkdir(dirname)
+                except:
+                    pass
+                if batch_idx is None:
+                    filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_progress"+"_EOE.wav")
+                else:
+                    filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_progress"+"_"+str(batch_idx)+".wav")
+                write_normalized_audio_to_disk(v, filename)
+            if t is not None:
+                try:
+                    os.mkdir(dirname)
+                except:
+                    pass
+                if batch_idx is None:
+                    filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_training"+"_EOE.wav")
+                else:
+                    filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_training"+"_"+str(batch_idx)+".wav")
+                write_normalized_audio_to_disk(t, filename)
 
     def on_train_batch_end(self, outputs, batch, batch_idx, dataloader_idx):
         if batch_idx % SAVE_EVERY_BATCHES == 0 and SAVE_EVERY_BATCHES > 0:
-            self.generate_progress_report(batch_idx)
+            self.generate_progress_report(False, batch_idx)
+        else:
+            self.generate_progress_report(False, batch_idx)
 
-    # def on_train_epoch_end(self, *args, **kwargs):
-    #     #self.generate_progress_report(None)
-        
-    #     output = OrderedDict({
-    #         'early_stop_on': self.ready_to_stop,
-    #     })
-    #     self.log('early_stop_on', self.ready_to_stop, on_step=False, on_epoch=True, prog_bar=False)
-    #     return output
+    def on_train_epoch_end(self, *args, **kwargs):
+        if self.current_epoch % SAVE_EVERY_EPOCH == 0 and SAVE_EVERY_EPOCH > 0:
+            self.generate_progress_report(True, None, True)
     
     # def on_train_batch_start(self, *args, **kwargs):
     #     if self.ready_to_stop:
@@ -503,22 +561,18 @@ if __name__ == "__main__":
 
     #print_global_constants()
     
-    print("Initializing Visualizer...")
-    VIS = TAMetricsPlotter()
-    VIS_qlock = Lock()
+    
 
     print("Creating Models...")
-
-    #i = curses.wrapper(train_until_interrupt, epoch, True)
-    stopper = MyEarlyStopping('early_stop_on_step',patience=0, strict=True, mode='max')
-    data_mod = TASadDataModule(num_workers=1)
+    #stopper = MyEarlyStopping('early_stop_on_step',patience=0, strict=True, mode='max')
+    data_mod = TADataModule(num_workers=0)
     data_mod.prepare_data()
     data_mod.setup()
     model = TensAudio()
-    trainer = TATrainer(gpus=1, accelerator='dp', auto_scale_batch_size=False)#, limit_train_batches=8, max_epochs=4)
+    trainer = TATrainer(gpus=1, accelerator='dp', auto_scale_batch_size=False, max_epochs=10000000)#, limit_train_batches=8, max_epochs=16)
 
     print("Creating test audio...")
-    inp = data_mod.set[1].unsqueeze(0)
+    inp = data_mod.set[np.random.randint(len(data_mod.set) - 1)].unsqueeze(0)
     gram = audio_to_specgram(inp)
     stft = audio_to_stftgram(inp, DIS_N_FFT, DIS_HOP_LEN)
     # print(stft.size())
@@ -528,17 +582,33 @@ if __name__ == "__main__":
     # print(gram[:,1].sum())
     audio1 = specgram_to_audio(gram)
     audio2 = stftgram_to_audio(stft, DIS_HOP_LEN)
+    audio3 = specgram_to_audio(random_phase_shuffle(audio_to_specgram(inp), PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE))
+    audio4 = F.dropout(audio3, DIS_DROPOUT, training=True, inplace=False)
 
     write_normalized_audio_to_disk(inp.view(-1), './original audio.wav')
     write_normalized_audio_to_disk(audio1.view(-1), "./specgram.wav")
     write_normalized_audio_to_disk(audio2.view(-1), "./stftgram.wav")
+    write_normalized_audio_to_disk(audio3.view(-1), "./specgram_shuffled.wav")
+    write_normalized_audio_to_disk(audio4.view(-1), "./specgram_shuffled_dropout.wav")
+
+    print("Real audio specgram:")
+    print("Mag min/max/mean:", gram[:,0].min(), gram[:,0].max(), gram[:,0].mean())
+    print("Phase min/max/mean:", gram[:,1].min(), gram[:,1].max(), gram[:,1].mean())
 
     print("Initializing 'lazy' modules...")
-    noise = generate_input_noise()#[-2:]
-    gen_output = model.gen(noise)
-    dis_output = model.dis(gen_output)
-    #print("Got", dis_output[0].item(), "and", dis_output[1].item(), "from the discriminator on initial pass.")
-    print("Got output size", list(dis_output.shape), "from discriminator.")
+    with torch.no_grad():
+        noise = generate_input_noise()#[-2:]
+        gen_output = model.gen(noise)
+        dis_output_fake = model.dis(gen_output)
+        dis_output_real = model.dis(audio3)
+        #print("Got", dis_output[0].item(), "and", dis_output[1].item(), "from the discriminator on initial pass.")
+        print("Got output size", tuple(dis_output_fake.shape), "from discriminator.")
+        print("Real verdict:", dis_output_real.mean().item())
+        print("Fake verdict:", dis_output_fake.mean().item())
+
+    print("Initializing Visualizer...")
+    VIS = TAMetricsPlotter(10 * int(np.ceil(len(data_mod.set) / BATCH_SIZE)))
+    VIS_qlock = Lock()
 
     print("Initialization complete! Starting...")
     time.sleep(1)

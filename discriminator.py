@@ -22,9 +22,8 @@ class TADiscriminator(pl.LightningModule):
         self.stride = DIS_STRIDE
         if DIS_MODE in [0, 3]:
             self.ndf = 2
-            x = int(np.sqrt(TOTAL_SAMPLES_OUT)) * 2
-            y = int(np.sqrt(TOTAL_SAMPLES_OUT)) * 2
-            self.samps = x*y
+            self.samps = TOTAL_SAMPLES_OUT * 2
+            x = self.samps
         elif DIS_MODE == 1:
             self.ndf = TOTAL_SAMPLES_OUT
         elif DIS_MODE == 2:
@@ -45,13 +44,13 @@ class TADiscriminator(pl.LightningModule):
         s1 = self.stride
         k2 = self.ksz
         s2 = self.stride
-        while self.samps > 256:
+        while self.samps > 64:
             c = min(DIS_MAX_CHANNELS, int(self.ndf * 2**i))
             n = min(DIS_MAX_CHANNELS, int(self.ndf * 2**(i+1)))
             
-            if y <= self.ksz:
-                k2 = 1
-                s2 = 1
+            # if y <= self.ksz:
+            #     k2 = 1
+            #     s2 = 1
             
             if x <= self.ksz:
                 s1 = 1
@@ -60,21 +59,19 @@ class TADiscriminator(pl.LightningModule):
             i += 1
             #sqrt_samps = int(np.sqrt(self.samps))
             x = (x - (k1 - 1) - 1) // s1 + 1
-            y = (y - (k2 - 1) - 1) // s2 + 1
-            self.samps = x*y
-            self.net.append(nn.Conv2d(c, n, (k1, k2), (s1, s2), groups=c, bias=False))
-            self.net.append(nn.BatchNorm2d(n))
-            self.net.append(nn.LeakyReLU(0.2, inplace=True))
-            v_cprint("Created Conv2d layer #{6} with c={0} n={1} k=({2}, {3}) s=({4}, {5})\tsamps={7}".format(c, n, k1, k2, s1, s2, i, self.samps))
+            #y = (y - (k2 - 1) - 1) // s2 + 1
+            self.samps = x
+            self.net.append(nn.Dropout(DIS_DROPOUT, False))
+            self.net.append(nn.Conv1d(c, n, k1, s1, groups=c, bias=False))
+            self.net.append(nn.BatchNorm1d(n))
+            self.net.append(nn.LeakyReLU(0.2, inplace=False))
+            #v_cprint("Created Conv2d layer #{6} with c={0} n={1} k=({2}, {3}) s=({4}, {5})\tsamps={7}".format(c, n, k1, s1, i, self.samps))
         print("Created", i, "sets of Discriminator layers.")
         x = (x - (k1 - 1) - 1) // s1 + 1
-        y = (y - (k2 - 1) - 1) // s2 + 1
-        self.samps = x*y
-        self.net.append(nn.Conv2d(n, 1, 1, 1, groups=1, bias=False))
+        #y = (y - (k2 - 1) - 1) // s2 + 1
+        #self.samps = x*y
+        self.net.append(nn.Conv1d(n, 1, 1, 1, groups=1, bias=False))
         self.net.append(nn.Flatten())
-        self.net.append(nn.LazyLinear(256, bias=False))
-        self.net.append(nn.LazyLinear(128, bias=False))
-        self.net.append(nn.LazyLinear(64, bias=False))
         self.net.append(nn.LazyLinear(32, bias=False))
         self.net.append(nn.LazyLinear(16, bias=False))
         self.net.append(nn.LazyLinear(8, bias=False))
@@ -82,19 +79,20 @@ class TADiscriminator(pl.LightningModule):
         self.net.append(nn.LazyLinear(2, bias=False))
         self.net.append(nn.LazyLinear(1, bias=False))
         self.net.append(nn.Sigmoid())
-        self.net.append(nn.Flatten())
+        #self.net.append(nn.Flatten())
 
         self.net = nn.ModuleList(self.net)
     
     def forward(self, inp):
         if DIS_MODE == 0:
-            actual_input = ag.Variable(torch.unsqueeze(inp.to(torch.float), 0).reshape(1,2,TOTAL_SAMPLES_OUT//2), requires_grad=True)
+            actual_input = inp.to(torch.float).view(inp.shape[0],2,-1)
         elif DIS_MODE == 1:
-            fft1 = ag.Variable(torch.unsqueeze(
-                torch.fft.fft(inp.to(torch.float), n=TOTAL_SAMPLES_OUT, norm='forward'), -1), requires_grad=True)
-            mag = ag.Variable(torch.square(torch.real(fft1)) + torch.square(torch.imag(fft1)), requires_grad=True)
-            pha = ag.Variable(torch.atan2(torch.real(fft1), torch.imag(fft1)), requires_grad=True)
-            actual_input = ag.Variable(torch.stack((mag, pha)).permute(0,1,2), requires_grad=True)
+            raise NotImplementedError("NYI")
+            # fft1 = ag.Variable(torch.unsqueeze(
+            #     torch.fft.fft(inp.to(torch.float), norm='forward'), -1), requires_grad=True)
+            # mag = ag.Variable(torch.square(torch.real(fft1)) + torch.square(torch.imag(fft1)), requires_grad=True)
+            # pha = ag.Variable(torch.atan2(torch.real(fft1), torch.imag(fft1)), requires_grad=True)
+            # actual_input = ag.Variable(torch.stack((mag, pha)).permute(0,1,2), requires_grad=True)
         elif DIS_MODE == 2:
             # what an ugly line of code
             if N_GEN_MEL_CHANNELS in inp.shape or DIS_N_MELS in inp.shape:
@@ -112,8 +110,7 @@ class TADiscriminator(pl.LightningModule):
                 #         ),0),3), requires_grad=True)
             #mel1.retain_grad()
         elif DIS_MODE == 3:
-            specgram = audio_to_specgram(inp.view(-1)).view(inp.shape[0], self.ndf, 2, -1)
-            actual_input = ag.Variable(specgram, requires_grad=True)
+            actual_input = audio_to_specgram(inp.view(inp.shape[0], -1)).view(inp.shape[0], self.ndf, -1).requires_grad_(True)
 
         verdicts = actual_input
         if torch.is_grad_enabled():
@@ -128,6 +125,3 @@ class TADiscriminator(pl.LightningModule):
             if torch.isnan(verdicts).any():
                 verdicts = torch.nan_to_num(verdicts, 0.5, 0.5, 0.5)
         return verdicts.clamp(0.001+FAKE_LABEL, 0.999*REAL_LABEL+FAKE_LABEL).squeeze()
-    
-    def training_step(self, batch, batch_idx):
-        return self(batch)

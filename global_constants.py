@@ -5,6 +5,8 @@ TRAINING_DIR = "D:\\tensaudio_training\\"
 
 MODEL_DIR = "D:\\tensaudio_models\\"
 
+DATASET_DIRNAME = "piano/ta"
+
 # must be divisible by 100
 VIS_WIDTH = 1600
 VIS_HEIGHT = 900
@@ -17,8 +19,8 @@ VIS_HOP_LEN = VIS_N_FFT//4
 SLEEP_TIME = 0
 MAX_ITERS_PER_SEC = 0
 
-SAVE_EVERY_EPOCH = True
-SAVE_EVERY_BATCHES = 500
+SAVE_EVERY_EPOCH = 50
+SAVE_EVERY_BATCHES = 54
 
 VERBOSITY_LEVEL = 1 # 0, 1, 2
 
@@ -26,11 +28,12 @@ GRIFFIN_LIM_MAX_ITERS_PREVIEW = 0
 GRIFFIN_LIM_MAX_ITERS_SAVING = 0
 
 # Hyperparameters
-LR = 0.00001
+GEN_LR = 0.0002
+DIS_LR = 0.0002
 BETA = 0.5
 GEN_MOMENTUM = 0.01
 
-BATCH_SIZE = 5 # lower = more efficient but lower quality training (must be 2 or greater)
+BATCH_SIZE = 32 # lower = faster but lower quality training (must be 2 or greater)
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
@@ -44,21 +47,21 @@ GEN_MODE = 6            # 0 = TBI
                         # 6 = Conv/Hilbert "Specgram" mode ([batch, 2, time])
                         # 10 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 22050
 GEN_SAMPLE_RATE_FACTOR = 1
 SUBTYPE = 'PCM_16'
-INPUT_DURATION = 1 / SAMPLE_RATE
-OUTPUT_DURATION = 2
+INPUT_DURATION = 100 / SAMPLE_RATE
+OUTPUT_DURATION = 5
 
-GEN_INITIAL_LIN_SCALE = 32          # higher = more memory, must be 1 or greater
+GEN_INITIAL_LIN_SCALE = 1          # higher = more memory, must be 1 or greater
 GEN_MAX_LIN_FEATURES = 4096
 GEN_KERNEL_SIZE_UPSCALING = 53    # higher = more memory, supposedly odd numbers work better
-GEN_STRIDE_UPSCALING = 16      # higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
+GEN_STRIDE_UPSCALING = 2      # higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
 GEN_KERNEL_SIZE_DOWNSCALING = 53   # higher = more memory, supposedly odd numbers work better
 GEN_STRIDE_DOWNSCALING = 1          # must be 1 or greater
 GEN_MIN_LAYERS = 1
-GEN_MAX_CHANNELS = 512
-GEN_PHASE_SHUFFLE = 0.005
+GEN_MAX_CHANNELS = 4
+
 
 # Audio mode only
 N_CHANNELS = 1
@@ -82,14 +85,16 @@ TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/dis_ckpts folder or the discsriminator model will give
 # an error!
-INPUT_MODE = 'direct'   # 'direct' = direct comparison of example and example result
-                        # 'conv' = comparison of example and convolved example result
-DIS_MODE = 2            # 0 = Direct mode
+
+DIS_MODE = 3            # 0 = Direct mode
                         # 1 = FFT mode
                         # 2 = Mel mode
                         # 3 = Specgram mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
+PHASE_SHUFFLE = 0.03
+PHASE_SHUFFLE_CHANCE = 0.1
+DIS_DROPOUT = 0.00
 DIS_MAX_CHANNELS = 2
 DIS_STRIDE = 2
 DIS_KERNEL_SIZE = 1

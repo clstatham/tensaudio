@@ -159,6 +159,15 @@ def normalize_audio(audio):
     return F.normalize(audio.flatten(), dim=0)
 def normalize_data(tensor):
     return tensor/(tensor.abs().max() + EPSILON)
+def normalize_negone_one(x):
+    a = x - x.min(-1, keepdim=True)[0]
+    b = a / (a.max(-1, keepdim=True)[0] + EPSILON)
+    return 2 * b - 1
+def normalize_zero_one(x):
+    a = x - x.min(-1, keepdim=True)[0]
+    b = a / (a.max(-1, keepdim=True)[0] + EPSILON)
+    return b
+    
 def write_normalized_audio_to_disk(sig, fn):
     sig_numpy = librosa.util.normalize(sig.clone().detach().cpu().numpy())
     #scaled = np.int16(sig_numpy * 32767)
@@ -249,6 +258,17 @@ def polar_to_rect(mag, phase_angle):
 #     #phase_angle = p * np.pi
 #     return polar_to_rect(mag, phase_angle)
 
+_MEL_BREAK_FREQUENCY_HERTZ = 700.0
+_MEL_HIGH_FREQUENCY_Q = 1127.0
+
+def mel_to_linear(m):
+    return _MEL_BREAK_FREQUENCY_HERTZ * (
+        torch.exp(m / _MEL_HIGH_FREQUENCY_Q) - 1.0
+    )
+def linear_to_mel(f):
+    return _MEL_HIGH_FREQUENCY_Q * torch.log(
+        1.0 + (f / _MEL_BREAK_FREQUENCY_HERTZ))
+
 def hilbert_from_scratch_pytorch(u):
     # N : fft length
     # M : number of elements to zero out
@@ -281,7 +301,7 @@ def specgram_to_fft(specgram):
     mag = specgram[0]
     p = specgram[1]
     #phase_angle = torch.cumsum(p * np.pi, -1)
-    phase_angle = p * np.pi
+    phase_angle = mel_to_linear(p * np.pi)
     return polar_to_rect(mag, phase_angle)
 
 def audio_to_stftgram(audio, n_fft, hop_len):
@@ -318,8 +338,9 @@ def audio_to_specgram(audio):
     out = []
     for batch in audio:
         ana = hilbert_from_scratch_pytorch(batch)
-        a = torch.abs(ana)
-        p = torch.atan2(ana.imag, ana.real) / np.pi
+        mel_ana = ana
+        a = torch.abs(mel_ana)
+        p = linear_to_mel(torch.atan2(mel_ana.imag, mel_ana.real) / np.pi)
         #f = inst_freq_pytorch_2(p, use_unwrap=False)
         out.append(torch.stack((a, p), dim=0))
     return torch.stack(out)
@@ -327,10 +348,13 @@ def audio_to_specgram(audio):
 def specgram_to_audio(specgram):
     out = []
     for batch in specgram:
-        fft = specgram_to_fft(batch).requires_grad_(True)
+        mel_fft = specgram_to_fft(batch).requires_grad_(True)
+        if torch.is_grad_enabled():
+            mel_fft.retain_grad()
+        fft = mel_fft
         if torch.is_grad_enabled():
             fft.retain_grad()
-        invhilb = hilbert_from_scratch_pytorch(-fft).requires_grad_(True)
+        invhilb = hilbert_from_scratch_pytorch(fft).requires_grad_(True)
         if torch.is_grad_enabled():
             invhilb.retain_grad()
         out.append(torch.imag(invhilb).requires_grad_(True))
