@@ -7,6 +7,11 @@ import glob
 from datetime import datetime
 from collections import OrderedDict
 
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+import tensorflow.keras.backend as K
+
 #import ctcsound
 import librosa
 import librosa.display
@@ -18,16 +23,6 @@ import scipy.io.wavfile
 import six
 import soundfile
 import timer3
-import torch
-import torch.nn as nn
-import torch.autograd as ag
-import torch.distributed as dist
-import torch.multiprocessing as mp
-import torchaudio
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import EarlyStopping, LambdaCallback
-from torch.utils.data import Dataset, DataLoader
-from torch.nn.parallel import DistributedDataParallel as DDP
 from matplotlib import animation, cm
 from pygame.locals import *
 
@@ -39,160 +34,27 @@ from helper import *
 from hilbert import *
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-#torch.autograd.set_detect_anomaly(True)
 plt.switch_backend('agg')
 
 np.random.seed(int(round(time.time())))
-torch.random.manual_seed(int(round(time.time())))
-
-total_amps = []
-total_phases = []
-total_gen_losses = []
-total_dis_losses = []
-total_real_verdicts = []
-total_fake_verdicts = []
-current_view_mode = 1
-current_output = np.zeros(TOTAL_SAMPLES_OUT)
-current_example = np.zeros(TOTAL_SAMPLES_OUT)
-vis_paused = True
-
-def clear_metrics():
-    global total_gen_losses, total_dis_losses, total_fake_verdicts, total_real_verdicts
-    total_dis_losses = []
-    total_fake_verdicts = []
-    total_gen_losses = []
-    total_real_verdicts = []
-
-def record_amp_phase(amp, phase):
-    # total_amps.append(amp)
-    # total_phases.append(phase)
-    pass
-
-def open_truncate_pad(name):
-    ret = []
-    srs = torch.empty(0)
-    for filename in os.listdir(os.path.join(RESOURCES_DIR, name)):
-        f = soundfile.SoundFile(os.path.join(RESOURCES_DIR, name, filename), "r")
-        data = torch.as_tensor(f.read()).requires_grad_(True)
-        sr = torch.as_tensor(f.samplerate).unsqueeze(0)
-        #stacked = torch.stack((data, sr)).requires_grad_(True)
-        if len(data.shape) > 1 and data.shape[1] != 1:
-            data = data.permute(1,0)[0]
-        sr_quotient = f.samplerate / SAMPLE_RATE
-        new_len = OUTPUT_DURATION * sr_quotient
-        new_samples = int(new_len * f.samplerate)
-        ret.append(data[:new_samples])
-        srs = torch.cat((srs.detach().requires_grad_(True), sr))
-    return ret, srs
-
-def iterate_and_resample(files, srs):
-    arr = []
-    for i in range(len(files)):
-        fil = files[i]
-        if len(fil.shape) > 1 and fil.shape[1] != 1:
-            fil = fil.permute(1,0)[0]
-        #fortfil = np.asfortranarray(fil.detach().requires_grad_(True).cpu().numpy())
-        #a = librosa.resample(fortfil, srs[i].item(), SAMPLE_RATE)
-        a = torchaudio.transforms.Resample(srs[i].item(), SAMPLE_RATE).forward(fil.detach().clone())
-        # = torch.from_numpy(a).requires_grad_(True)
-        a = torch.repeat_interleave(a, max(1,int(TOTAL_SAMPLES_OUT // a.view(-1).size(0))), dim=0)
-        arr.append(a[:TOTAL_SAMPLES_OUT].float())
-    return arr
-
-class TADataset(Dataset):
-    def __init__(self, data_dir):
-        super().__init__()
-        self.data_dir = data_dir
-        self.filenames = glob.glob(self.data_dir+str("/*.wav"))
-        self.dims = (len(self.filenames))
-    def __len__(self):
-        return len(self.filenames)
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-        if idx > len(self.filenames):
-            raise ValueError("Index out of range", idx)
-            return None
-        
-        fn = os.path.join(self.data_dir, self.filenames[idx])
-        f = soundfile.SoundFile(fn, "r")
-        data = torch.as_tensor(f.read()).requires_grad_(True)
-        sr = torch.as_tensor(f.samplerate).unsqueeze(0)
-        if len(data.shape) > 1 and data.shape[1] != 1:
-            data = data.permute(1,0)[0].view(-1)
-        sr_quotient = f.samplerate / SAMPLE_RATE
-        new_len = OUTPUT_DURATION * sr_quotient
-        new_samples = int(new_len * f.samplerate)
-        audio = data.view(-1)[:new_samples]
-        audio_resampled = torchaudio.transforms.Resample(sr.item(), SAMPLE_RATE)(audio.detach().clone())
-        if audio_resampled.shape[0] < TOTAL_SAMPLES_OUT:
-            audio_resampled = torch.cat((audio_resampled, torch.zeros(TOTAL_SAMPLES_OUT-audio_resampled.shape[0])))
-        return audio_resampled.float()[:TOTAL_SAMPLES_OUT].cpu()
-
-class TADataModule(pl.LightningDataModule):
-    def __init__(self, data_dir:str = RESOURCES_DIR, batch_size:int = BATCH_SIZE, num_workers:int = 0):
-        super().__init__()
-        self.data_dir = os.path.join(data_dir, DATASET_DIRNAME)
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-
-    def setup(self, stage=None):
-        self.set = TADataset(self.data_dir)
-    def train_dataloader(self):
-        return DataLoader(self.set, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
-    def test_dataloader(self):
-        return DataLoader(self.set, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
 
 def generate_input_noise():
     if GEN_MODE in [10]:
-        return torch.randn(1, TOTAL_SAMPLES_IN, 1, requires_grad=True)
+        raise NotImplementedError
     else:
-        return torch.randn(BATCH_SIZE, 1, TOTAL_SAMPLES_IN, requires_grad=True)
+        return tf.random.normal([BATCH_SIZE, 1, TOTAL_SAMPLES_IN])
     
 
-def random_phase_shuffle(inp, chance, scale):
-    out = inp.clone()
-    second_half = inp.shape[1] // 2
-    noise = normalize_negone_one(torch.randn((inp.shape[0], inp.shape[1]-second_half, *inp.shape[2:])).to(inp.device)) \
-        * scale * inp[:,second_half:].abs().max()
-    noise = F.dropout(noise, 1 - chance, True, False)
-    out[:,second_half:] = inp[:,second_half:] + noise
-    return out
 
-def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        #pass
-        #nn.init.kaiming_uniform_(m.weight.data)
-        nn.init.xavier_normal_(m.weight.data, 0.02) #nn.init.xavier_normal_(m.weight.data, 0.0821)
-        #m.weight.data.copy_(he_init(m.weight.data))
-    elif classname.find('BatchNorm') != -1:
-        nn.init.normal_(m.weight.data, 1.0, 0.02)
-        nn.init.constant_(m.bias.data, 0)
-
-def get_output_from_params(params, window):
-    global current_params
-    #params = params.clone().cpu().numpy()
-    current_params = params
-    #if window is not None:
-        #window.addstr(3,0, str(params.shape[0]))
-        #window.refresh()
-    audio = CSIRun.apply(params.clone())
-    #noise = np.random.randn(len(audio)) * 0.0001
-    # for i in range(len(audio)):
-    #     if audio[i] == np.inf or audio[i] == np.nan:
-    #         audio[i] = 0.00001
-    return audio
-
-class MyEarlyStopping(EarlyStopping):
-    def on_validation_end(self, trainer, pl_module):
-        # override this to disable early stopping at the end of val loop
-        pass
-
-    def on_train_end(self, trainer, pl_module):
-        # instead, do it at the end of training loop
-        self._run_early_stopping_check(trainer, pl_module)
-
+# def random_phase_shuffle(inp, chance, scale):
+#     out = inp.clone()
+#     second_half = inp.shape[1] // 2
+#     noise = normalize_negone_one(torch.randn((inp.shape[0], inp.shape[1]-second_half, *inp.shape[2:])).to(inp.device)) \
+#         * scale * inp[:,second_half:].abs().max()
+#     noise = F.dropout(noise, 1 - chance, True, False)
+#     out[:,second_half:] = inp[:,second_half:] + noise
+#     return out
+"""
 global VIS_qlock
 
 class TAMetricsPlotter():
@@ -349,214 +211,137 @@ class TAMetricsPlotter():
         yield
 
 global VIS
+"""
 
-class TensAudio(pl.LightningModule):
-    def __init__(self, 
-        glr: float = GEN_LR,
-        dlr: float = DIS_LR,
-        b1: float = BETA,
-        b2: float = 0.999,
-        gm: float = GEN_MOMENTUM,
-        batch_size: int = BATCH_SIZE
-    ):
+class TensAudio():
+    def __init__(self):
         super().__init__()
-        self.save_hyperparameters()
 
         print("Creating Generator...")
         self.gen = TAGenerator()
         print("Creating Discriminator...")
         self.dis = TADiscriminator()
 
-        self.gen.apply(weights_init)
-        #self.dis.apply(weights_init)
+        self.dis_optim = keras.optimizers.Adam(dlr, beta1=b1, beta2=b2)
+        self.gen_optim = keras.optimizers.Adam(glr, beta1=b1, beta2=b2)
 
         self.validation_z = generate_input_noise()
-    
-    @property
-    def automatic_optimization(self):
-        return False
 
-    def dis_phase_shuffled(self, z):
-        if len(z.shape) == 3:
-            return self.dis(specgram_to_audio(random_phase_shuffle(z, PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE)))
-        elif len(z.shape) == 2:
-            return self.dis(specgram_to_audio(random_phase_shuffle(audio_to_specgram(z), PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE)))
-        elif len(z.shape) == 1:
-            return self.dis(specgram_to_audio(random_phase_shuffle(audio_to_specgram(z.view(1, -1)), PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE)))
-        else:
-            raise ValueError
-
-    def forward(self, z):
+    def call(self, z):
         return self.gen(z)
     
     def loss(self, label, val):
-        return F.binary_cross_entropy(val, label)
+        return keras.losses.binary_crossentropy(val, label)
 
-    def training_step(self, batch, batch_idx, optimizer_idx):
-        #if self.q.empty():
-        #    self.ready_to_stop += 1
-        #else:
-        #    self.ready_to_stop = self.q.get()
-        #self.log('early_stop_on', self.ready_to_stop, on_step=True, on_epoch=True, prog_bar=False)
-        dis_optim, gen_optim = self.optimizers()
-        
+    @tf.function
+    def training_step(self, batch):
         z = generate_input_noise()
-        z.type_as(batch)
-        gen_output = self(z)
+        with tf.GradientTape() as gen_tape, tf.GradientTape() as dis_tape:
+            gen_output = self.gen(z, training=True)
 
-        
-        dis_output_gen = self.dis_phase_shuffled(gen_output).requires_grad_(True)
-        valid = torch.full_like(dis_output_gen, REAL_LABEL)
-        valid.type_as(batch)
-        gen_loss = self.loss(valid, dis_output_gen)
-        gen_optim.zero_grad()
-        self.manual_backward(gen_loss, retain_graph=True)
-        gen_optim.step()
-        
+            dis_output_gen = self.dis(gen_output, training=True)
+            dis_output_real = self.dis(batch, training=True)
 
-        dis_output_real = self.dis_phase_shuffled(batch)
-        dis_output_fake = self.dis_phase_shuffled(gen_output.detach())
-        valid = torch.full_like(dis_output_real, REAL_LABEL)
-        valid.type_as(batch)
-        fake = torch.full_like(dis_output_fake, FAKE_LABEL)
-        fake.type_as(batch)
-        real_loss = self.loss(valid, dis_output_real)
-        fake_loss = self.loss(fake, dis_output_fake)
-        dis_loss = (real_loss + fake_loss) / 2.
-        dis_optim.zero_grad()
-        self.manual_backward(dis_loss)
-        dis_optim.step()
-
-        VIS.put_queue(('gen_loss', gen_loss.detach().cpu()))
-        VIS.put_queue(('dis_loss', dis_loss.detach().cpu()))
-        VIS.put_queue(('real_verdict', dis_output_real.mean().detach().cpu()))
-        VIS.put_queue(('fake_verdict', dis_output_fake.mean().detach().cpu()))
-        self.log('gen_loss', gen_loss, on_step=True, on_epoch=False, prog_bar=True)
-        self.log('dis_loss', dis_loss, on_step=True, on_epoch=False, prog_bar=True)
-        self.log('dis_output_real', dis_output_real.mean(), on_step=True, on_epoch=False, prog_bar=False)
-        self.log('dis_output_fake', dis_output_fake.mean(), on_step=True, on_epoch=False, prog_bar=False)
+            gen_loss = self.loss(tf.ones_like(dis_output_gen), dis_output_gen)
+            dis_loss_real = self.loss(tf.ones_like(dis_output_real), dis_output_real)
+            dis_loss_fake = self.loss(tf.zeros_like(dis_output_gen), dis_output_gen)
+            dis_loss = (dis_loss_real + dis_loss_fake) / 2.
         
-    def configure_optimizers(self):
-        glr = self.hparams.glr
-        dlr = self.hparams.dlr
-        b1 = self.hparams.b1
-        b2 = self.hparams.b2
-        gm = self.hparams.gm
-        print("Creating Optimizers...")
-        dis_optim = torch.optim.Adam(self.dis.parameters(), lr=dlr, betas=(b1, b2))
-        gen_optim = torch.optim.Adam(self.gen.parameters(), lr=glr, betas=(b1, b2))
-        return [dis_optim, gen_optim], []
+        gen_grads = gen_tape.gradient(gen_loss, self.gen.trainable_variables)
+        dis_grads = dis_tape.gradient(dis_loss, self.dis.trainable_variables)
+        self.gen_optim.apply_gradients(zip(gen_grads, self.gen.trainable_variables))
+        self.dis_optim.apply_gradients(zip(dis_grads, self.dis.trainable_variables))
+
+        # VIS.put_queue(('gen_loss', gen_loss.detach().cpu()))
+        # VIS.put_queue(('dis_loss', dis_loss.detach().cpu()))
+        # VIS.put_queue(('real_verdict', dis_output_real.mean().detach().cpu()))
+        # VIS.put_queue(('fake_verdict', dis_output_fake.mean().detach().cpu()))
     
-    def generate_progress_report(self, save=False, batch_idx=None, force_send=False):
-        v, t = None, None
-        if not VIS.paused or force_send:
-            gen_output_valid = self(self.validation_z).cpu().detach()
-            for i, b in enumerate(gen_output_valid):
-                if b.abs().max() > 0:
-                    v = b
-                    VIS.put_queue(('validation', b))
-                    break
-                # else:
-                #     print("Skipping validation mini-batch of zeros", i, ".")
-            
-            gen_output_test = self(generate_input_noise()).cpu().detach()
-            for i, b in enumerate(gen_output_test):
-                if b.abs().max() > 0:
-                    t = b
-                    VIS.put_queue(('test', b))
-                    break
-                # else:
-                #     print("Skipping testing mini-batch of zeros", i, ".")
+    def train(self, dataset, epochs):
+        for epoch in range(epochs):
+            for batch in dataset:
+                self.training_step(batch)
         
-        if save:
-            if VIS.paused:
-                gen_output_valid = self(self.validation_z).cpu().detach()
-                for b in gen_output_valid:
-                    if b.abs().max() > 0:
-                        v = b
-                        break
+
+    
+    # def generate_progress_report(self, save=False, batch_idx=None, force_send=False):
+    #     v, t = None, None
+    #     if not VIS.paused or force_send:
+    #         gen_output_valid = self(self.validation_z).cpu().detach()
+    #         for i, b in enumerate(gen_output_valid):
+    #             if b.abs().max() > 0:
+    #                 v = b
+    #                 VIS.put_queue(('validation', b))
+    #                 break
+    #             # else:
+    #             #     print("Skipping validation mini-batch of zeros", i, ".")
+            
+    #         gen_output_test = self(generate_input_noise()).cpu().detach()
+    #         for i, b in enumerate(gen_output_test):
+    #             if b.abs().max() > 0:
+    #                 t = b
+    #                 VIS.put_queue(('test', b))
+    #                 break
+    #             # else:
+    #             #     print("Skipping testing mini-batch of zeros", i, ".")
+        
+    #     if save:
+    #         if VIS.paused:
+    #             gen_output_valid = self(self.validation_z).cpu().detach()
+    #             for b in gen_output_valid:
+    #                 if b.abs().max() > 0:
+    #                     v = b
+    #                     break
                 
-                gen_output_test = self(generate_input_noise()).cpu().detach()
-                for b in gen_output_test:
-                    if b.abs().max() > 0:
-                        t = b
-                        break
-            dirname = os.path.join(TRAINING_DIR, datetime.now().strftime("%d.%m.%Y"))
-            timestamp = datetime.now().strftime("%H.%M.%S")
-            if v is not None:
-                try:
-                    os.mkdir(dirname)
-                except:
-                    pass
-                if batch_idx is None:
-                    filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_progress"+"_EOE.wav")
-                else:
-                    filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_progress"+"_"+str(batch_idx)+".wav")
-                write_normalized_audio_to_disk(v, filename)
-            if t is not None:
-                try:
-                    os.mkdir(dirname)
-                except:
-                    pass
-                if batch_idx is None:
-                    filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_training"+"_EOE.wav")
-                else:
-                    filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_training"+"_"+str(batch_idx)+".wav")
-                write_normalized_audio_to_disk(t, filename)
+    #             gen_output_test = self(generate_input_noise()).cpu().detach()
+    #             for b in gen_output_test:
+    #                 if b.abs().max() > 0:
+    #                     t = b
+    #                     break
+    #         dirname = os.path.join(TRAINING_DIR, datetime.now().strftime("%d.%m.%Y"))
+    #         timestamp = datetime.now().strftime("%H.%M.%S")
+    #         if v is not None:
+    #             try:
+    #                 os.mkdir(dirname)
+    #             except:
+    #                 pass
+    #             if batch_idx is None:
+    #                 filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_progress"+"_EOE.wav")
+    #             else:
+    #                 filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_progress"+"_"+str(batch_idx)+".wav")
+    #             write_normalized_audio_to_disk(v, filename)
+    #         if t is not None:
+    #             try:
+    #                 os.mkdir(dirname)
+    #             except:
+    #                 pass
+    #             if batch_idx is None:
+    #                 filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_training"+"_EOE.wav")
+    #             else:
+    #                 filename = os.path.join(dirname, timestamp+'_'+str(self.current_epoch)+"_training"+"_"+str(batch_idx)+".wav")
+    #             write_normalized_audio_to_disk(t, filename)
 
-    def on_train_batch_end(self, outputs, batch, batch_idx, dataloader_idx):
-        if batch_idx % SAVE_EVERY_BATCHES == 0 and SAVE_EVERY_BATCHES > 0:
-            self.generate_progress_report(False, batch_idx)
-        else:
-            self.generate_progress_report(False, batch_idx)
+    # def on_train_batch_end(self, outputs, batch, batch_idx, dataloader_idx):
+    #     if batch_idx % SAVE_EVERY_BATCHES == 0 and SAVE_EVERY_BATCHES > 0:
+    #         self.generate_progress_report(False, batch_idx)
+    #     else:
+    #         self.generate_progress_report(False, batch_idx)
 
-    def on_train_epoch_end(self, *args, **kwargs):
-        if self.current_epoch % SAVE_EVERY_EPOCH == 0 and SAVE_EVERY_EPOCH > 0:
-            self.generate_progress_report(True, None, True)
+    # def on_train_epoch_end(self, *args, **kwargs):
+    #     if self.current_epoch % SAVE_EVERY_EPOCH == 0 and SAVE_EVERY_EPOCH > 0:
+    #         self.generate_progress_report(True, None, True)
     
     # def on_train_batch_start(self, *args, **kwargs):
     #     if self.ready_to_stop:
     #         return -1
 
-global model
-
-class TATrainer(pl.Trainer):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.counter = 0
-    
-    def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
-        next(VIS.handle_pygame_events(self.counter))
-        self.counter += 1
-        super().on_train_batch_start(batch, batch_idx, dataloader_idx)
-
 if __name__ == "__main__":
-    global VIS, model
-
-    print("TensAudio version 0.1 by https://github.com/clstatham")
-
-    if GEN_MODE in [10]:
-        print("Creating CSound Interface...")
-        result = G_csi.compile()
-        if result != 0:
-            raise RuntimeError("CSound compilation failed!")
-        current_params = [0.]*N_PARAMS*TOTAL_PARAM_UPDATES
-
-    #print_global_constants()
+    print("TensAudio version 0.2 by https://github.com/clstatham")
 
     print("Creating Models...")
-    # generator = TAGenerator()
-    # traced_generator = torch.jit.trace(generator, generate_input_noise())
-    # traced_generator.save("TAGenerator.pt")
-
-    data_mod = TADataModule(num_workers=0)
-    data_mod.prepare_data()
-    data_mod.setup()
-    model = TensAudio()
-    trainer = TATrainer(gpus=1, accelerator='dp', auto_scale_batch_size=False, max_epochs=10000000)#, limit_train_batches=8, max_epochs=16)
-
-    # traced_generator = torch.jit.trace(model.gen, generate_input_noise())
-    # traced_generator.save("TAGenerator.pt")
+    ta = TensAudio()
+    ds = tf.data.Dataset.list_files(str('C:/tensaudio_resources/piano/ta'), shuffle=True)
+    
 
     print("Creating Test Audio...")
     inp = data_mod.set[np.random.randint(len(data_mod.set) - 1)].unsqueeze(0)

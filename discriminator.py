@@ -1,12 +1,9 @@
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+import tensorflow.keras.backend as K
+
 import numpy as np
-import torch
-import torch.fft
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.autograd as ag
-import torchaudio
-import torchaudio.transforms
-import pytorch_lightning as pl
 #from online_norm_pytorch import OnlineNorm1d, OnlineNorm2d
 from helper import *
 from global_constants import *
@@ -14,7 +11,7 @@ from hilbert import *
 import os
 import inspect
 
-class TADiscriminator(pl.LightningModule):
+class TADiscriminator(keras.Model):
     def __init__(self, *args, **kwargs):
         super(TADiscriminator, self).__init__(*args, **kwargs)
 
@@ -61,33 +58,28 @@ class TADiscriminator(pl.LightningModule):
             x = (x - (k1 - 1) - 1) // s1 + 1
             #y = (y - (k2 - 1) - 1) // s2 + 1
             self.samps = x
-            self.net.append(nn.Dropout(DIS_DROPOUT, False))
-            self.net.append(nn.Conv1d(c, n, k1, s1, groups=c, bias=False))
-            self.net.append(nn.BatchNorm1d(n))
-            self.net.append(nn.LeakyReLU(0.2, inplace=False))
+            self.net.append(layers.Dropout(DIS_DROPOUT))
+            self.net.append(layers.Conv1D(n, k1, s1, use_bias=False))
+            self.net.append(layers.BatchNormalization())
+            self.net.append(layers.LeakyReLU(0.2))
             #v_cprint("Created Conv2d layer #{6} with c={0} n={1} k=({2}, {3}) s=({4}, {5})\tsamps={7}".format(c, n, k1, s1, i, self.samps))
         print("Created", i, "sets of Discriminator layers.")
         x = (x - (k1 - 1) - 1) // s1 + 1
         #y = (y - (k2 - 1) - 1) // s2 + 1
         #self.samps = x*y
-        self.net.append(nn.Conv1d(n, 1, 1, 1, groups=1, bias=False))
-        self.net.append(nn.Flatten())
-        self.net.append(nn.LazyLinear(128, bias=False))
-        self.net.append(nn.LazyLinear(64, bias=False))
-        self.net.append(nn.LazyLinear(32, bias=False))
-        self.net.append(nn.LazyLinear(16, bias=False))
-        self.net.append(nn.LazyLinear(8, bias=False))
-        self.net.append(nn.LazyLinear(4, bias=False))
-        self.net.append(nn.LazyLinear(2, bias=False))
-        self.net.append(nn.LazyLinear(1, bias=False))
-        self.net.append(nn.Sigmoid())
-        #self.net.append(nn.Flatten())
-
-        self.net = nn.ModuleList(self.net)
+        self.net.append(layers.Conv1D(1, 1, 1, use_bias=False))
+        self.net.append(layers.Flatten())
+        self.net.append(layers.Dense(128, use_bias=False))
+        self.net.append(layers.Dense(64, use_bias=False))
+        self.net.append(layers.Dense(32, use_bias=False))
+        self.net.append(layers.Dense(16, use_bias=False))
+        self.net.append(layers.Dense(8, use_bias=False))
+        self.net.append(layers.Dense(1, use_bias=False))
+        self.net.append(layers.Activation('sigmoid'))
     
     def forward(self, inp):
         if DIS_MODE == 0:
-            actual_input = inp.to(torch.float).view(inp.shape[0],2,-1)
+            raise NotImplementedError
         elif DIS_MODE == 1:
             raise NotImplementedError("NYI")
             # fft1 = ag.Variable(torch.unsqueeze(
@@ -96,34 +88,22 @@ class TADiscriminator(pl.LightningModule):
             # pha = ag.Variable(torch.atan2(torch.real(fft1), torch.imag(fft1)), requires_grad=True)
             # actual_input = ag.Variable(torch.stack((mag, pha)).permute(0,1,2), requires_grad=True)
         elif DIS_MODE == 2:
-            # what an ugly line of code
-            if N_GEN_MEL_CHANNELS in inp.shape or DIS_N_MELS in inp.shape:
-                actual_input = inp.to(torch.float).unsqueeze(0)
-            else:
-                melspec = AudioToMelWithGradients.apply(inp.to(torch.float), DIS_N_FFT, DIS_N_MELS, DIS_HOP_LEN).requires_grad_(True)
-                if torch.is_grad_enabled():
-                    melspec.retain_grad()
-                actual_input = melspec.unsqueeze(1).requires_grad_(True)
-                if torch.is_grad_enabled():
-                    actual_input.retain_grad()
-                # actual_input = ag.Variable(torch.unsqueeze(torch.unsqueeze(torchaudio.transforms.MelSpectrogram(
-                #     SAMPLE_RATE, DIS_N_FFT, n_mels=DIS_N_MELS)(
-                #             inp[:-DIS_N_MELS].to(torch.float).cpu()
-                #         ),0),3), requires_grad=True)
-            #mel1.retain_grad()
+            raise NotImplementedError
+            # # what an ugly line of code
+            # if N_GEN_MEL_CHANNELS in inp.shape or DIS_N_MELS in inp.shape:
+            #     actual_input = inp.to(torch.float).unsqueeze(0)
+            # else:
+            #     melspec = AudioToMelWithGradients.apply(inp.to(torch.float), DIS_N_FFT, DIS_N_MELS, DIS_HOP_LEN).requires_grad_(True)
+            #     if torch.is_grad_enabled():
+            #         melspec.retain_grad()
+            #     actual_input = melspec.unsqueeze(1).requires_grad_(True)
+            #     if torch.is_grad_enabled():
+            #         actual_input.retain_grad()
         elif DIS_MODE == 3:
-            actual_input = audio_to_specgram(inp.view(inp.shape[0], -1)).view(inp.shape[0], self.ndf, -1).requires_grad_(True)
+            actual_input = audio_to_specgram(inp.reshape([inp.shape[0], -1])).reshape([inp.shape[0], self.ndf, -1])
 
         verdicts = actual_input
-        if torch.is_grad_enabled():
-            verdicts.retain_grad()
         for i, layer in enumerate(self.net):
-            if i >= len(self.net) - 4:
-                #print("Checking")
-                pass
             verdicts = layer(verdicts)
-            # if layer.__class__.__name__.find('Conv') != -1:
-            #     verdicts = F.normalize(verdicts)
-            if torch.isnan(verdicts).any():
-                verdicts = torch.nan_to_num(verdicts, 0.5, 0.5, 0.5)
-        return verdicts.clamp(0.001+FAKE_LABEL, 0.999*REAL_LABEL+FAKE_LABEL).squeeze()
+        
+        return tf.squeeze(verdicts)
