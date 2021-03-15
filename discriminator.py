@@ -44,7 +44,7 @@ class TADiscriminator(pl.LightningModule):
         s1 = self.stride
         k2 = self.ksz
         s2 = self.stride
-        while self.samps > 64:
+        while self.samps > 256:
             c = min(DIS_MAX_CHANNELS, int(self.ndf * 2**i))
             n = min(DIS_MAX_CHANNELS, int(self.ndf * 2**(i+1)))
             
@@ -72,6 +72,8 @@ class TADiscriminator(pl.LightningModule):
         #self.samps = x*y
         self.net.append(nn.Conv1d(n, 1, 1, 1, groups=1, bias=False))
         self.net.append(nn.Flatten())
+        self.net.append(nn.LazyLinear(128, bias=False))
+        self.net.append(nn.LazyLinear(64, bias=False))
         self.net.append(nn.LazyLinear(32, bias=False))
         self.net.append(nn.LazyLinear(16, bias=False))
         self.net.append(nn.LazyLinear(8, bias=False))

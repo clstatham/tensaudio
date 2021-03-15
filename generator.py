@@ -322,11 +322,11 @@ class TAGenerator(pl.LightningModule):
             shuf = nn.PixelShuffle
         elif mode == 'stft':
             self.n_channels = 2
-            self.n_fft = N_GEN_FFT // 2
+            self.n_fft = N_GEN_FFT // 2 + 1
             self.linear_units_in = TOTAL_SAMPLES_IN * 2 * self.n_channels
             self.linear_units_out = TOTAL_SAMPLES_IN * GEN_INITIAL_LIN_SCALE * self.n_channels
             self.initial_n_fft = self.linear_units_out // 2
-            self.total_samp_out = int(GEN_N_FRAMES * 1.1)
+            self.total_samp_out = int(self.n_channels * self.n_fft * GEN_N_FRAMES * 1)
             us = nn.ConvTranspose2d
             ds = nn.Conv2d
             norm = nn.BatchNorm2d
@@ -346,7 +346,7 @@ class TAGenerator(pl.LightningModule):
             #shuf = PixelShuffle1D
         lin = nn.Linear
         rs = torchaudio.transforms.Resample
-
+        self.is_2d = ds.__name__.find('2d') != -1
         self.padding_mode = 'reflect'
         
         
@@ -362,7 +362,7 @@ class TAGenerator(pl.LightningModule):
         dim_mul = 16
 
         self.initial_layers = [
-            nn.Linear(TOTAL_SAMPLES_IN, self.n_channels*self.dim*dim_mul, bias=False),
+            nn.LazyLinear(self.n_channels*self.dim*dim_mul, bias=False),
         ]
         self.initial_layers = nn.Sequential(*self.initial_layers)
         dummy = self.initial_layers(dummy)
@@ -373,35 +373,41 @@ class TAGenerator(pl.LightningModule):
         
         prob = 0.01
         s_us = 2
-        k_us = 25
+        k_us = 44
         k_div = 8
         s_ds = 2
         k_ds = 2
         
         rnn_index = 0
 
-        dummy = dummy.view(dummy.shape[0], self.dim, -1)
+        if self.is_2d:
+            dummy = dummy.view(dummy.shape[0], self.dim, 1, -1)
+        else:
+            dummy = dummy.view(dummy.shape[0], self.dim, -1)
         samps_post_ds = dummy.numel() // dummy.shape[0]
         
         while dummy.numel() // dummy.shape[0] < self.total_samp_out:
-            self.conv_layers.append(torchaudio.transforms.Resample(dummy.shape[-1], dummy.shape[-1]*s_us))
-            dummy = self.conv_layers[-1](dummy)
+            #if self.is_2d:
+                #dummy = dummy.view(dummy.shape[0], -1)
+            #self.conv_layers.append(torchaudio.transforms.Resample(dummy.shape[-1], dummy.shape[-1]*s_us))
+            #dummy = self.conv_layers[-1](dummy)
+            #if self.is_2d:
+                #dummy = dummy.view(dummy.shape[0], self.dim, 4, -1)
             #k = max(dummy.shape[-1]//k_div, k_us)
             #k = min(k, dummy.shape[-1])
-            self.conv_layers.append(ds(dummy.shape[1], dummy.shape[1]*dim_mul, k_us, 1, groups=self.n_channels, bias=True, padding_mode='reflect')) # padding_mode = 'reflect'
+            self.conv_layers.append(us(dummy.shape[1], dummy.shape[1]*dim_mul, k_us, 1, groups=self.n_channels, bias=False, padding_mode='zeros')) # padding_mode = 'reflect'
             dummy = self.conv_layers[-1](dummy)
             self.conv_layers.append(norm(dummy.shape[1]))
             dummy = self.conv_layers[-1](dummy)
             self.conv_layers.append(nn.ReLU(False))
             dummy = self.conv_layers[-1](dummy)
             while dummy.numel() // dummy.shape[0] > self.total_samp_out * 2:
-                self.conv_layers.append(ds(dummy.shape[1], dummy.shape[1], k_us, 2, groups=dummy.shape[1], bias=True))
+                self.conv_layers.append(ds(dummy.shape[1], dummy.shape[1], k_us, 2, groups=self.n_channels, bias=False))
                 dummy = self.conv_layers[-1](dummy)
-            # dummy = self.conv_layers[-1](dummy)
-            # self.conv_layers.append(norm(dim*dim_mul))
-            # dummy = self.conv_layers[-1](dummy)
-            # self.conv_layers.append(nn.ReLU())
-            # dummy = self.conv_layers[-1](dummy)
+                self.conv_layers.append(norm(dummy.shape[1]))
+                dummy = self.conv_layers[-1](dummy)
+                self.conv_layers.append(nn.ReLU())
+                dummy = self.conv_layers[-1](dummy)
             dim_mul //= 2
             dim_mul = max(dim_mul, 1)
             k_us //= dim_mul
@@ -564,33 +570,39 @@ class TAGenerator(pl.LightningModule):
             v_cprint("Still need:", self.total_samp_out - samps_post_ds)
         """
         
-        v_cprint("="*80)
+        #v_cprint("="*80)
         print("Created", self.n_sets, "sets of generator processing layers.")
 
-        #v_cprint("Created Linear layer.", self.total_samp_out, ">", self.n_channels * self.n_bins**2)
         self.lin_layers = [
-            #lin(self.total_samp_out, self.n_channels * self.n_bins**2)
         ]
         
-        dummy = dummy.view(dummy.shape[0], -1, 1)
+        if self.is_2d:
+            dummy = dummy.contiguous().view(dummy.shape[0], self.n_channels, self.n_fft-1, -1)
+        else:
+            dummy = dummy.view(dummy.shape[0], -1, 1)
         
-        self.final_layers = [
-            # nn.Flatten(),
-            #shuf(8),
-            #ds(dummy.shape[1], 2, 1, 1, groups=1, bias=self.use_bias),
-            #nn.AdaptiveMaxPool2d((1, None)),
-            #nn.AvgPool2d(samps_post_ds // self.total_samp_out, 1),
-            #PixelShuffle1D(dummy.shape[-2]//2),
-            #nn.Tanh(),
-            #torchaudio.transforms.Resample(dummy.shape[-1], self.total_samp_out//self.n_channels),
-            nn.Identity(),
-            # nn.Flatten(),
-        ]
+        if self.is_2d:
+            self.final_layers = [
+                # nn.Flatten(),
+                #shuf(8),
+                #ds(dummy.shape[1], 2, 1, 1, groups=1, bias=self.use_bias),
+                #nn.AdaptiveMaxPool2d((1, None)),
+                #nn.AvgPool2d(samps_post_ds // self.total_samp_out, 1),
+                #nn.PixelShuffle(int(np.sqrt(dummy.shape[1]//self.n_channels))),
+                #nn.Tanh(),
+                #torchaudio.transforms.Resample(dummy.shape[-1], self.total_samp_out//self.n_channels),
+                nn.Identity(),
+                # nn.Flatten(),
+            ]
+        else:
+            self.final_layers = [
+                nn.Identity(),
+            ]
         v_cprint("Created final layers.")
         
         self.conv_layers = nn.ModuleList(self.conv_layers)
         self.final_layers = nn.Sequential(*self.final_layers)
-        dummy = pixelshuffle1d(dummy, dummy.shape[-2]//self.n_channels)
+        #dummy = pixelshuffle1d(dummy, dummy.shape[-2]//self.n_channels)
         dummy = self.final_layers(dummy)
         # dummy = dummy.permute(0, 2, 1)
         # dummy = F.pixel_shuffle(dummy, 4)
@@ -601,12 +613,14 @@ class TAGenerator(pl.LightningModule):
         # dummy = dummy.permute(0, 2, 1, 3)
         # dummy = F.pixel_shuffle(dummy, 2)
         # dummy = dummy.permute(0, 2, 1, 3)
+        if self.is_2d:
+            dummy = torch.cat((dummy, torch.zeros((dummy.shape[0], dummy.shape[1], 1, dummy.shape[3])).to(dummy.device)), -2)
         v_cprint("Final shape:", list(dummy.shape))
         print()
 
     def sanity_check(self, data):
-        if torch.isnan(data).any():
-            raise RuntimeError("Data is NaN!")
+        # if torch.isnan(data).any():
+        #     raise RuntimeError("Data is NaN!")
         pass
 
     def run_conv_net(self, inp, mode):
@@ -621,8 +635,8 @@ class TAGenerator(pl.LightningModule):
             data = self.initial_layers(data.view(batch_sz, self.linear_units_in))
             data = data.reshape((batch_sz, 1, self.n_fft, -1))
         elif mode == 'stft':
-            post_init_audio = self.initial_layers(data.view(batch_sz, self.linear_units_in))
-            post_init = audio_to_stftgram(post_init_audio.view(batch_sz, -1), self.initial_n_fft, self.initial_n_fft//4)#.view(BATCH_SIZE, self.n_channels, self.initial_n_fft, -1)
+            post_init_audio = self.initial_layers(data.view(batch_sz, -1))
+            post_init = post_init_audio.view(batch_sz, self.dim, 4, -1)#.view(BATCH_SIZE, self.n_channels, self.initial_n_fft, -1)
         elif mode == 'specgram':
             post_init_audio = self.initial_layers(data.view(batch_sz, TOTAL_SAMPLES_IN).to(self.device))
             #post_init = audio_to_specgram(post_init_audio.view(batch_sz, -1)).view(batch_sz, self.n_channels, 2, -1)
@@ -704,48 +718,21 @@ class TAGenerator(pl.LightningModule):
         #j = 0
         if torch.is_grad_enabled():
             post_conv.retain_grad()
-        rnn_index = 0
         for i, layer in enumerate(self.conv_layers):
-            timestamp2 = time.time()
-            if layer.__class__.__name__.find('Linear') != -1:
-                orig_shape = post_conv.shape
-                post_conv = post_conv.contiguous().view(batch_sz, -1)
-            if layer.__class__.__name__ in ['RNN', 'LSTM', 'GRU'] != -1:
-                orig_shape = post_conv.shape
-                post_conv = post_conv.view(post_conv.shape[0], post_conv.shape[1]*4, -1)
-                post_conv, state = layer(post_conv, (self.rnn_states[rnn_index][0].to(post_conv.device), self.rnn_states[rnn_index][1].to(post_conv.device)))
-                self.rnn_states[rnn_index] = (state[0].detach(), state[1].detach())
-                post_conv = post_conv.contiguous().view(orig_shape)
-                rnn_index += 1
-            else:
-                post_conv = layer(post_conv)
-            if layer.__class__.__name__.find('Linear') != -1:
-                post_conv = post_conv.view(post_conv.shape[0], orig_shape[1], -1)
-                #print(j, ":", layer.__class__.__name__, "done in", round(time.time()-timestamp2, 3), "seconds.")
-            # if layer.__class__.__name__.find('Conv') != -1 and torch.is_grad_enabled() and post_conv.shape[1] > 1:
-            #     post_conv = random_phase_shuffle(post_conv, GEN_PHASE_SHUFFLE)
+            post_conv = layer(post_conv)
             self.sanity_check(post_conv)
-        
-
-        # for i in range(self.n_sets):
-        #     for j in range(self.n_layers_per_set):
-        #         t = self.conv_layers[i*self.n_layers_per_set+j].__class__.__name__
-        #         # if t.find('Conv') != -1 and torch.is_grad_enabled():
-        #         #     for chan in range(data.shape[1]):
-        #         #         data[:, chan] = F.normalize(data[:, chan], dim=-1)
-        #         data = self.conv_layers[i*self.n_layers_per_set+j](data)
-        #         #self.sanity_check(data)
-        #         if mode not in ['specgram', 'stft']:
-        #             data = check_and_fix_size(data, self.n_fft, -2)
-        #             data = data.view(BATCH_SIZE, self.n_channels, self.n_fft, -1)
-
-        #post_conv = torch.nan_to_num(post_conv, EPSILON, EPSILON, EPSILON)
         
         #vv_cprint("|}} Convolution layers done in", round(time.time()-timestamp1, 3), "seconds.")
         
-        post_conv = post_conv.view(post_conv.shape[0], -1, 1)
+        if self.is_2d:
+            post_conv = post_conv.contiguous().view(post_conv.shape[0], self.n_channels, self.n_fft-1, -1)
+        else:
+            post_conv = post_conv.contiguous().view(post_conv.shape[0], -1, 1)
         post_final = self.final_layers(post_conv)
-        post_final = pixelshuffle1d(post_final, post_final.shape[-2]//self.n_channels)
+        if self.is_2d:
+            post_final = torch.cat((post_final, torch.zeros((post_final.shape[0], post_final.shape[1], 1, post_final.shape[3])).to(post_final.device)), -2)
+        else:
+            post_final = pixelshuffle1d(post_final, post_final.shape[-2]//self.n_channels)
         
         self.sanity_check(post_final)
         if torch.is_grad_enabled():
@@ -758,17 +745,20 @@ class TAGenerator(pl.LightningModule):
             stft = MelToSTFTWithGradients.apply(invmel_inp, self.n_fft)
             data = stft_to_audio(stft, GEN_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_PREVIEW)
         elif mode == 'stft':
-            pre_stftgram = post_final.reshape(batch_sz, self.n_channels, self.n_fft, -1).requires_grad_(True)#[..., :self.total_samp_out]
+            #pre_stftgram = post_final.reshape(batch_sz, self.n_channels, self.n_fft, -1).requires_grad_(True)#[..., :self.total_samp_out]
+            pre_stftgram = post_final[..., :GEN_N_FRAMES]
             if torch.is_grad_enabled():
                 pre_stftgram.retain_grad()
-            stftgram = torch.stack((normalize_data(torch.sigmoid(pre_stftgram[:,0])), torch.tanh(pre_stftgram[:,1])), dim=1)
+            stftgram = torch.stack((normalize_zero_one(pre_stftgram[:,0]), normalize_negone_one(pre_stftgram[:,1])), dim=1)
             if torch.is_grad_enabled():
                 stftgram.retain_grad()
-            # stftgram[:, 0, :, :] = F.normalize(stftgram[0, :, :], dim=-1)
-            # stftgram[:, 1, :, :] = F.normalize(stftgram[1, :, :], dim=-1)
-            ret = stftgram_to_audio(stftgram, GEN_HOP_LEN)
+            
+            ret = normalize_negone_one(stftgram_to_audio(stftgram, GEN_HOP_LEN))
             self.sanity_check(ret)
-            #self.sanity_check(data)
+ 
+            out = ret.flatten(0)
+            #out = ret[0]
+            write_normalized_audio_to_disk(out, "./test1.wav")
         elif mode == 'specgram':
             pre_specgram = post_final[..., :self.total_samp_out].view(batch_sz, self.n_channels, -1)
             
@@ -794,9 +784,9 @@ class TAGenerator(pl.LightningModule):
             # print("Post-scaled Specgram:")
             # print("Mag min/max/mean:", specgram[0,0].min().item(), specgram[0,0].max().item(), specgram[0,0].mean().item())
             # print("Phase min/max/mean:", specgram[0,1].min().item(), specgram[0,1].max().item(), specgram[0,1].mean().item())
-            # out = ret.flatten(0)
-            # #out = ret[0]
-            # write_normalized_audio_to_disk(out, "./test1.wav")
+            #out = ret.flatten(0)
+            out = ret[0]
+            write_normalized_audio_to_disk(out, "./test1.wav")
             # fig, (ax1, ax2) = plt.subplots(2, 1)
             # ax1.plot(specgram[0,0].contiguous().detach().cpu().numpy())
             # ax2.plot(specgram[0,1].contiguous().detach().cpu().numpy())

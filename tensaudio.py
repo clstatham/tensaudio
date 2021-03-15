@@ -40,7 +40,7 @@ from hilbert import *
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 #torch.autograd.set_detect_anomaly(True)
-#plt.switch_backend('agg')
+plt.switch_backend('agg')
 
 np.random.seed(int(round(time.time())))
 torch.random.manual_seed(int(round(time.time())))
@@ -146,16 +146,8 @@ class TADataModule(pl.LightningDataModule):
 def generate_input_noise():
     if GEN_MODE in [10]:
         return torch.randn(1, TOTAL_SAMPLES_IN, 1, requires_grad=True)
-    elif GEN_MODE in [2]:
-        return torch.randn(BATCH_SIZE, 2, TOTAL_SAMPLES_IN, requires_grad=True)
-    elif GEN_MODE in [4]:
-        return torch.randn(BATCH_SIZE, 1, N_GEN_MEL_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True)
-    elif GEN_MODE in [5]:
-        return torch.randn(BATCH_SIZE, 2, 2, TOTAL_SAMPLES_IN, requires_grad=True)
-    elif GEN_MODE in [6]:
-        return torch.randn(BATCH_SIZE, 1, TOTAL_SAMPLES_IN, requires_grad=True)
     else:
-        return torch.randn(BATCH_SIZE, N_CHANNELS, TOTAL_SAMPLES_IN, requires_grad=True)
+        return torch.randn(BATCH_SIZE, 1, TOTAL_SAMPLES_IN, requires_grad=True)
     
 
 def random_phase_shuffle(inp, chance, scale):
@@ -170,9 +162,9 @@ def random_phase_shuffle(inp, chance, scale):
 def weights_init(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
-        pass
+        #pass
         #nn.init.kaiming_uniform_(m.weight.data)
-        #nn.init.xavier_normal_(m.weight.data, 0.0821) #nn.init.xavier_normal_(m.weight.data, 0.0821)
+        nn.init.xavier_normal_(m.weight.data, 0.02) #nn.init.xavier_normal_(m.weight.data, 0.0821)
         #m.weight.data.copy_(he_init(m.weight.data))
     elif classname.find('BatchNorm') != -1:
         nn.init.normal_(m.weight.data, 1.0, 0.02)
@@ -542,15 +534,6 @@ if __name__ == "__main__":
     global VIS, model
 
     print("TensAudio version 0.1 by https://github.com/clstatham")
-    
-    # fig, ax = plt.subplots()
-    # img = librosa.display.specshow(melspec.cpu().numpy(), ax=ax, sr=SAMPLE_RATE, hop_length=VIS_HOP_LEN)
-    # fig.colorbar(img, ax=ax)
-    # plt.show()
-
-    # plt.figure()
-    # librosa.display.waveplot(audio.cpu().numpy(), sr=SAMPLE_RATE)
-    # plt.show()
 
     if GEN_MODE in [10]:
         print("Creating CSound Interface...")
@@ -560,18 +543,22 @@ if __name__ == "__main__":
         current_params = [0.]*N_PARAMS*TOTAL_PARAM_UPDATES
 
     #print_global_constants()
-    
-    
 
     print("Creating Models...")
-    #stopper = MyEarlyStopping('early_stop_on_step',patience=0, strict=True, mode='max')
+    # generator = TAGenerator()
+    # traced_generator = torch.jit.trace(generator, generate_input_noise())
+    # traced_generator.save("TAGenerator.pt")
+
     data_mod = TADataModule(num_workers=0)
     data_mod.prepare_data()
     data_mod.setup()
     model = TensAudio()
     trainer = TATrainer(gpus=1, accelerator='dp', auto_scale_batch_size=False, max_epochs=10000000)#, limit_train_batches=8, max_epochs=16)
 
-    print("Creating test audio...")
+    # traced_generator = torch.jit.trace(model.gen, generate_input_noise())
+    # traced_generator.save("TAGenerator.pt")
+
+    print("Creating Test Audio...")
     inp = data_mod.set[np.random.randint(len(data_mod.set) - 1)].unsqueeze(0)
     gram = audio_to_specgram(inp)
     stft = audio_to_stftgram(inp, DIS_N_FFT, DIS_HOP_LEN)
@@ -613,34 +600,10 @@ if __name__ == "__main__":
     print("Initialization complete! Starting...")
     time.sleep(1)
 
-    trainer.tune(model, data_mod)
+    #trainer.tune(model, data_mod)
 
     trainer.fit(model, data_mod)
 
-    #print("Done!")
+    print("Done!")
 
-    # start_time = time.time()
-    # with torch.no_grad():
-    #     if GEN_MODE in [10]:
-    #         params = onestep.generate_one_step()
-    #         data = get_output_from_params(params, None)
-    #     else:
-    #         data = onestep.generate_one_step()
-    #         if GEN_MODE == 4 and DIS_MODE == 2:
-    #             data = MelToSTFTWithGradients.apply(data[:,:], N_GEN_MEL_CHANNELS)
-    #             data = stft_to_audio(data, GEN_HOP_LEN, GRIFFIN_LIM_MAX_ITERS_SAVING)
-    # end_time = round(time.time() - start_time, 2)
-    # print("Generated output in", end_time, "sec.")
-    # if G_csi:
-    #     G_csi.stop()
-
-    # write_normalized_audio_to_disk(data, 'out1.wav')
-
-    #plot_metrics(i, save_to_disk=True)
-
-    #print("Saving models...")
-    #save_states(i)
-
-    #dist.destroy_process_group()
-    #pygame.quit()
-
+    pygame.quit()

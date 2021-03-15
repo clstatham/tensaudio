@@ -285,9 +285,6 @@ def hilbert_from_scratch_pytorch(u):
     U[1:N//2] = 2 * U[1:N//2]
     # take inverse Fourier transform
     v = torch.fft.ifft(U)
-    if torch.isnan(v[0]):
-        raise RuntimeError
-        pass
     return v
 
 def stftgram_to_stft(stftgram):
