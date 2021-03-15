@@ -122,18 +122,18 @@ class TAGenerator(keras.Model):
         v_cprint("*-"*39 + "*")
         v_cprint("Target length is", self.total_samp_out, "samples.")
 
-        dummy = keras.initializers.RandomNormal(shape=[TOTAL_SAMPLES_IN], BATCH_SIZE)
+        dummy = tf.random.normal([BATCH_SIZE, TOTAL_SAMPLES_IN])
 
         self.dim = 32
         dim_mul = 16
 
         self.initial_layers = [
-            layers.InputLayer((TOTAL_SAMPLES_IN), dummy.shape),
+            layers.InputLayer(dummy.shape),
             dns(self.n_channels*self.dim*dim_mul, use_bias=False),
         ]
         self.initial_layers = keras.Sequential(self.initial_layers)
         dummy = self.initial_layers(dummy)
-        v_cprint("Created Linear layer.", self.initial_layers[0].input_shape(), ">", self.initial_layers[-1].output_shape())
+        v_cprint("Created Linear layer.", self.initial_layers.input_shape, ">", self.initial_layers.output_shape)
 
         self.n_sets = 0
         self.blur_amount = 1
@@ -153,14 +153,14 @@ class TAGenerator(keras.Model):
             dummy = tf.reshape(dummy, [dummy.shape[0], self.dim, -1])
         samps_post_ds = tf.size(dummy)
         
-        while tf.size(dummy) < self.total_samp_out:
-            self.conv_layers.append(us(dummy.shape[1]*dim_mul, k_us, 1, use_bias=False, padding='zeros', kernel_initializer=self.initializer)) # padding_mode = 'reflect'
+        while tf.size(dummy) // dummy.shape[0] < self.total_samp_out:
+            self.conv_layers.append(us(dummy.shape[1]*dim_mul, k_us, s_us, use_bias=False, padding='same', kernel_initializer=self.initializer)) # padding_mode = 'reflect'
             dummy = self.conv_layers[-1](dummy)
             self.conv_layers.append(norm())
             dummy = self.conv_layers[-1](dummy)
             self.conv_layers.append(layers.ReLU())
             dummy = self.conv_layers[-1](dummy)
-            while dummy.numel() // dummy.shape[0] > self.total_samp_out * 2:
+            while tf.size(dummy) // dummy.shape[0] > self.total_samp_out * 2:
                 self.conv_layers.append(ds(dummy.shape[1], k_us, 2, use_bias=False, kernel_initializer=self.initializer))
                 dummy = self.conv_layers[-1](dummy)
                 self.conv_layers.append(norm())
@@ -410,7 +410,7 @@ class TAGenerator(keras.Model):
         elif mode == 'specgram':
             pre_specgram = post_final[..., :self.total_samp_out].reshape(post_final.shape[0], self.n_channels, -1)
 
-            specgram = tf.stack([]
+            specgram = tf.stack([
                 normalize_zero_one(pre_specgram[:,0]),
                 linear_to_mel(normalize_negone_one(pre_specgram[:,1]))
                 ], axis=1).requires_grad_(True)

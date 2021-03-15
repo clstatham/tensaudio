@@ -11,6 +11,7 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 import tensorflow.keras.backend as K
+import tensorflow_datasets as tfds
 
 #import ctcsound
 import librosa
@@ -28,12 +29,14 @@ from pygame.locals import *
 
 #from csoundinterface import CSIRun, CsoundInterface, G_csi
 from discriminator import TADiscriminator
-from generator import TAGenerator, TAInstParamGenerator, he_init
+from generator import TAGenerator
 from global_constants import *
 from helper import *
 from hilbert import *
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+#os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+physical_devices = tf.config.list_physical_devices('GPU')
+tf.config.experimental.set_memory_growth(physical_devices[0], True)
 plt.switch_backend('agg')
 
 np.random.seed(int(round(time.time())))
@@ -222,8 +225,8 @@ class TensAudio():
         print("Creating Discriminator...")
         self.dis = TADiscriminator()
 
-        self.dis_optim = keras.optimizers.Adam(dlr, beta1=b1, beta2=b2)
-        self.gen_optim = keras.optimizers.Adam(glr, beta1=b1, beta2=b2)
+        self.dis_optim = keras.optimizers.Adam(DIS_LR, beta_1=BETA)
+        self.gen_optim = keras.optimizers.Adam(GEN_LR, beta_1=BETA)
 
         self.validation_z = generate_input_noise()
 
@@ -339,48 +342,46 @@ if __name__ == "__main__":
     print("TensAudio version 0.2 by https://github.com/clstatham")
 
     print("Creating Models...")
-    ta = TensAudio()
-    ds = tf.data.Dataset.list_files(str('C:/tensaudio_resources/piano/ta'), shuffle=True)
-    
+    model = TensAudio()
+    ds = tf.data.Dataset.list_files('C:/tensaudio_resources/piano/ta/*.wav', shuffle=True)
 
     print("Creating Test Audio...")
-    inp = data_mod.set[np.random.randint(len(data_mod.set) - 1)].unsqueeze(0)
+    inp = next(ds.as_numpy_iterator())
     gram = audio_to_specgram(inp)
-    stft = audio_to_stftgram(inp, DIS_N_FFT, DIS_HOP_LEN)
+    #stft = audio_to_stftgram(inp, DIS_N_FFT, DIS_HOP_LEN)
     # print(stft.size())
     # print(gram[:,0].min(), gram[:,0].max())
     # print(gram[:,1].min(), gram[:,1].max())
     # print(gram[:,0].sum())
     # print(gram[:,1].sum())
     audio1 = specgram_to_audio(gram)
-    audio2 = stftgram_to_audio(stft, DIS_HOP_LEN)
-    audio3 = specgram_to_audio(random_phase_shuffle(audio_to_specgram(inp), PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE))
-    audio4 = F.dropout(audio3, DIS_DROPOUT, training=True, inplace=False)
-
+    #audio2 = stftgram_to_audio(stft, DIS_HOP_LEN)
+    #audio3 = specgram_to_audio(random_phase_shuffle(audio_to_specgram(inp), PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE))
+    #audio4 = F.dropout(audio3, DIS_DROPOUT, training=True, inplace=False)
+ 
     write_normalized_audio_to_disk(inp.view(-1), './original audio.wav')
     write_normalized_audio_to_disk(audio1.view(-1), "./specgram.wav")
-    write_normalized_audio_to_disk(audio2.view(-1), "./stftgram.wav")
-    write_normalized_audio_to_disk(audio3.view(-1), "./specgram_shuffled.wav")
-    write_normalized_audio_to_disk(audio4.view(-1), "./specgram_shuffled_dropout.wav")
+    # write_normalized_audio_to_disk(audio2.view(-1), "./stftgram.wav")
+    # write_normalized_audio_to_disk(audio3.view(-1), "./specgram_shuffled.wav")
+    # write_normalized_audio_to_disk(audio4.view(-1), "./specgram_shuffled_dropout.wav")
 
     print("Real audio specgram:")
     print("Mag min/max/mean:", gram[:,0].min(), gram[:,0].max(), gram[:,0].mean())
     print("Phase min/max/mean:", gram[:,1].min(), gram[:,1].max(), gram[:,1].mean())
 
-    print("Initializing 'lazy' modules...")
-    with torch.no_grad():
-        noise = generate_input_noise()#[-2:]
-        gen_output = model.gen(noise)
-        dis_output_fake = model.dis(gen_output)
-        dis_output_real = model.dis(audio3)
-        #print("Got", dis_output[0].item(), "and", dis_output[1].item(), "from the discriminator on initial pass.")
-        print("Got output size", tuple(dis_output_fake.shape), "from discriminator.")
-        print("Real verdict:", dis_output_real.mean().item())
-        print("Fake verdict:", dis_output_fake.mean().item())
+    print("Initializing modules...")
+    noise = generate_input_noise()#[-2:]
+    gen_output = model.gen(noise)
+    dis_output_fake = model.dis(gen_output)
+    dis_output_real = model.dis(inp)
+    #print("Got", dis_output[0].item(), "and", dis_output[1].item(), "from the discriminator on initial pass.")
+    print("Got output size", tuple(dis_output_fake.shape), "from discriminator.")
+    print("Real verdict:", dis_output_real.mean().item())
+    print("Fake verdict:", dis_output_fake.mean().item())
 
-    print("Initializing Visualizer...")
-    VIS = TAMetricsPlotter(10 * int(np.ceil(len(data_mod.set) / BATCH_SIZE)))
-    VIS_qlock = Lock()
+    # print("Initializing Visualizer...")
+    # VIS = TAMetricsPlotter(10 * int(np.ceil(len(data_mod.set) / BATCH_SIZE)))
+    # VIS_qlock = Lock()
 
     print("Initialization complete! Starting...")
     time.sleep(1)
