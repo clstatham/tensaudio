@@ -29,6 +29,20 @@ from global_constants import *
 
 #     return x
 
+class SubpixelUpscaling1D(keras.layers.Layer):
+    def __init__(self, r):
+        super().__init__(trainable=False)
+        self.r = r
+    @tf.function
+    def call(self, x):
+        _, _, rc = x.get_shape()
+        assert rc % self.r == 0
+        #c = rc / r
+        y = tf.transpose(x, [2,1,0])
+        y = tf.batch_to_space(y, [self.r], [[0,0]])
+        y = tf.transpose(y, [2,1,0])
+        return y
+
 class TAGenerator(keras.Model):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -122,51 +136,58 @@ class TAGenerator(keras.Model):
         v_cprint("*-"*39 + "*")
         v_cprint("Target length is", self.total_samp_out, "samples.")
 
-        dummy = tf.random.normal([BATCH_SIZE, TOTAL_SAMPLES_IN])
+        dummy = tf.Variable(generate_input_noise(), trainable=False)
 
-        self.dim = 32
+        self.dim = 16
         dim_mul = 16
 
-        self.initial_layers = [
-            layers.InputLayer(dummy.shape),
-            dns(self.n_channels*self.dim*dim_mul, use_bias=False),
+        self.net = [
+            dns(self.n_channels*self.dim*dim_mul, use_bias=False, input_shape=[TOTAL_SAMPLES_IN]),
         ]
-        self.initial_layers = keras.Sequential(self.initial_layers)
-        dummy = self.initial_layers(dummy)
-        v_cprint("Created Linear layer.", self.initial_layers.input_shape, ">", self.initial_layers.output_shape)
+        dummy = self.net[0](dummy)
+        #v_cprint("Created Linear layer.", self.initial_layers.input_shape, ">", self.initial_layers.output_shape)
+        self.net.append(layers.Dropout(GEN_DROPOUT))
+        dummy = self.net[-1](dummy)
+
 
         self.n_sets = 0
         self.blur_amount = 1
         
         prob = 0.01
         s_us = 2
-        k_us = 44
+        k_us = 444
         k_div = 8
         s_ds = 2
         k_ds = 2
         
+        
+
         rnn_index = 0
 
         if self.is_2d:
             dummy = tf.reshape(dummy, [dummy.shape[0], self.dim, 4, -1])
         else:
-            dummy = tf.reshape(dummy, [dummy.shape[0], self.dim, -1])
+            #dummy = tf.reshape(dummy, [dummy.shape[0], self.dim, -1])
+            self.net.append(layers.Reshape([self.dim, -1]))
+            dummy = self.net[-1](dummy)
         samps_post_ds = tf.size(dummy)
-        
+
         while tf.size(dummy) // dummy.shape[0] < self.total_samp_out:
-            self.conv_layers.append(us(dummy.shape[1]*dim_mul, k_us, s_us, use_bias=False, padding='same', kernel_initializer=self.initializer)) # padding_mode = 'reflect'
-            dummy = self.conv_layers[-1](dummy)
-            self.conv_layers.append(norm())
-            dummy = self.conv_layers[-1](dummy)
-            self.conv_layers.append(layers.ReLU())
-            dummy = self.conv_layers[-1](dummy)
+            self.net.append(us(dummy.shape[-1]*dim_mul, k_us, s_us, use_bias=False, padding='same', kernel_initializer=self.initializer, trainable=False)) # padding_mode = 'reflect'
+            dummy = self.net[-1](dummy)
+            self.net.append(norm(momentum=0.9))
+            dummy = self.net[-1](dummy)
+            self.net.append(layers.ReLU())
+            dummy = self.net[-1](dummy)
+            self.net.append(SubpixelUpscaling1D(dummy.shape[-1]//self.n_channels))
+            dummy = self.net[-1](dummy)
             while tf.size(dummy) // dummy.shape[0] > self.total_samp_out * 2:
-                self.conv_layers.append(ds(dummy.shape[1], k_us, 2, use_bias=False, kernel_initializer=self.initializer))
-                dummy = self.conv_layers[-1](dummy)
-                self.conv_layers.append(norm())
-                dummy = self.conv_layers[-1](dummy)
-                self.conv_layers.append(layers.ReLU())
-                dummy = self.conv_layers[-1](dummy)
+                self.net.append(ds(dummy.shape[-1], k_us, 2, use_bias=False, kernel_initializer=self.initializer, trainable=False))
+                dummy = self.net[-1](dummy)
+                self.net.append(norm(momentum=0.9))
+                dummy = self.net[-1](dummy)
+                self.net.append(layers.Activation(tf.nn.tanh))
+                dummy = self.net[-1](dummy)
             dim_mul //= 2
             dim_mul = max(dim_mul, 1)
             k_us //= dim_mul
@@ -335,15 +356,20 @@ class TAGenerator(keras.Model):
         # else:
         #     dummy = tf.reshape(dummy, [-1, 1])
 
-        self.final_layers = [layers.Flatten()]
-        self.final_layers = keras.Sequential(self.final_layers)
-        dummy = self.final_layers(dummy)
+        # self.net += [SubpixelUpscaling1D()]
+        # dummy = self.net[-1](dummy)
+        
         v_cprint("Created final layers.")
+        v_cprint("Final shape:", list(dummy.shape))
 
         # if self.is_2d:
         #     dummy = torch.cat((dummy, torch.zeros((dummy.shape[0], dummy.shape[1], 1, dummy.shape[3])).to(dummy.device)), -2)
-
-        v_cprint("Final shape:", list(dummy.shape))
+        self.net = keras.Sequential(self.net)
+        for layer in self.net.layers:
+            if not layer.trainable:
+                layer.trainable = True
+        # self.net.call(generate_input_noise())
+        # self.net.summary()
         print()
 
     def sanity_check(self, data):
@@ -351,37 +377,17 @@ class TAGenerator(keras.Model):
         #     raise RuntimeError("Data is NaN!")
         pass
 
-    def run_conv_net(self, inp, mode):
+    #@tf.function
+    def run_conv_net(self, inp, mode, training):
         #print(inp.min().item(), inp.max().item(), inp.mean().item())
-        data = normalize_negone_one(inp.float()).to(self.device)
+        data = normalize_negone_one(tf.cast(inp, tf.float32))
         #print(data.min().item(), data.max().item(), data.mean().item())
-        vv_cprint("|}} Initial data.shape:", data.shape)
-        if mode == 'mel':
-            data = self.initial_layers(data.reshape([data.shape[0], self.linear_units_in]))
-            data = data.reshape([data.shape[0], 1, self.n_fft, -1])
-        elif mode == 'stft':
-            post_init_audio = self.initial_layers(data.reshape([data.shape[0], -1]))
-            post_init = post_init_audio.reshape([post_init_audio.shape[0], self.dim, 4, -1])#.view(BATCH_SIZE, self.n_channels, self.initial_n_fft, -1)
-        elif mode == 'specgram':
-            post_init_audio = self.initial_layers(data.reshape([data.shape[0], -1]))
-            #post_init = audio_to_specgram(post_init_audio.view(batch_sz, -1)).view(batch_sz, self.n_channels, 2, -1)
-            post_init = post_init_audio.reshape([post_init_audio.shape[0], self.dim, -1])
-        else:
-            raise NotImplementedError
+        #vv_cprint("|}} Initial data.shape:", data.shape)
 
-        self.sanity_check(post_init)
+        self.sanity_check(data)
 
-        vv_cprint("|}} Initial layers done.")
+        post_final = self.net(data, training=training)
 
-        post_conv = post_init
-        for i, layer in enumerate(self.conv_layers):
-            post_conv = layer(post_conv)
-            self.sanity_check(post_conv)
-        
-        vv_cprint("|}} Convolution layers done.")
-        
-        post_final = self.final_layers(post_conv)
-        
         self.sanity_check(post_final)
         if mode == 'mel' and DIS_MODE == 2:
             # ret = check_and_fix_size(data.squeeze(), self.n_fft, -2)
@@ -408,16 +414,17 @@ class TAGenerator(keras.Model):
             # write_normalized_audio_to_disk(out, "./test1.wav")
             raise NotImplementedError
         elif mode == 'specgram':
-            pre_specgram = post_final[..., :self.total_samp_out].reshape(post_final.shape[0], self.n_channels, -1)
+            #pre_specgram = tf.reshape(post_final, [tf.shape(post_final)[0], -1, self.n_channels])
+            pre_specgram = post_final
 
             specgram = tf.stack([
-                normalize_zero_one(pre_specgram[:,0]),
-                linear_to_mel(normalize_negone_one(pre_specgram[:,1]))
-                ], axis=1).requires_grad_(True)
+                normalize_zero_one(pre_specgram[:,:,0]),
+                linear_to_mel(normalize_negone_one(pre_specgram[:,:,1]))
+                ], axis=-1)
             
 
             self.sanity_check(specgram)
-            ret = specgram_to_audio(tf.squeeze(specgram))[..., :TOTAL_SAMPLES_OUT]
+            ret = specgram_to_audio(tf.squeeze(specgram))
             self.sanity_check(ret)
 
             # print("Pre-scaled Specgram:")
@@ -427,20 +434,17 @@ class TAGenerator(keras.Model):
             # print("Mag min/max/mean:", specgram[0,0].min().item(), specgram[0,0].max().item(), specgram[0,0].mean().item())
             # print("Phase min/max/mean:", specgram[0,1].min().item(), specgram[0,1].max().item(), specgram[0,1].mean().item())
             #out = ret.flatten(0)
-            out = ret[0]
-            write_normalized_audio_to_disk(out, "./test1.wav")
+            #out = ret[0]
+            #write_normalized_audio_to_disk(out, "./test1.wav")
             # fig, (ax1, ax2) = plt.subplots(2, 1)
             # ax1.plot(specgram[0,0].contiguous().detach().cpu().numpy())
             # ax2.plot(specgram[0,1].contiguous().detach().cpu().numpy())
             # plt.show()
         else:
             raise NotImplementedError
-            #self.sanity_check(data)
-        vv_cprint("|}} Final layers done.")
-        vv_cprint("|}} data.shape:", ret.shape)
         
         return ret
     
-    def forward(self, inputs):
-        return self.run_conv_net(inputs, 'specgram')[..., :TOTAL_SAMPLES_OUT]
+    def gen_fn(self, inputs, training):
+        return self.run_conv_net(inputs, 'specgram', training)[:, :TOTAL_SAMPLES_OUT]
         

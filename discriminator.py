@@ -67,17 +67,16 @@ class TADiscriminator(keras.Model):
         x = (x - (k1 - 1) - 1) // s1 + 1
         #y = (y - (k2 - 1) - 1) // s2 + 1
         #self.samps = x*y
-        self.net.append(layers.Conv1D(1, 1, 1, use_bias=False))
+        #self.net.append(layers.Conv1D(1, 1, 1, use_bias=False))
         self.net.append(layers.Flatten())
         self.net.append(layers.Dense(128, use_bias=False))
         self.net.append(layers.Dense(64, use_bias=False))
         self.net.append(layers.Dense(32, use_bias=False))
         self.net.append(layers.Dense(16, use_bias=False))
         self.net.append(layers.Dense(8, use_bias=False))
-        self.net.append(layers.Dense(1, use_bias=False))
-        self.net.append(layers.Activation('sigmoid'))
+        self.net.append(layers.Dense(1, use_bias=False, activation='sigmoid'))
     
-    def forward(self, inp):
+    def call(self, inp):
         if DIS_MODE == 0:
             raise NotImplementedError
         elif DIS_MODE == 1:
@@ -100,10 +99,10 @@ class TADiscriminator(keras.Model):
             #     if torch.is_grad_enabled():
             #         actual_input.retain_grad()
         elif DIS_MODE == 3:
-            actual_input = audio_to_specgram(inp.reshape([inp.shape[0], -1])).reshape([inp.shape[0], self.ndf, -1])
+            actual_input = tf.reshape(audio_to_specgram(tf.reshape(inp, [inp.shape[0], -1])), [inp.shape[0], self.ndf, -1])[..., :TOTAL_SAMPLES_OUT]
 
         verdicts = actual_input
         for i, layer in enumerate(self.net):
             verdicts = layer(verdicts)
         
-        return tf.squeeze(verdicts)
+        return tf.clip_by_value(tf.squeeze(verdicts), clip_value_min=0.001, clip_value_max=0.999)

@@ -61,6 +61,7 @@ GEN_KERNEL_SIZE_DOWNSCALING = 53   # higher = more memory, supposedly odd number
 GEN_STRIDE_DOWNSCALING = 1          # must be 1 or greater
 GEN_MIN_LAYERS = 1
 GEN_MAX_CHANNELS = 4
+GEN_DROPOUT = 0.2
 
 
 # Audio mode only
@@ -93,8 +94,8 @@ DIS_MODE = 3            # 0 = Direct mode
 REAL_LABEL = 1.
 FAKE_LABEL = 0.
 PHASE_SHUFFLE = 0.03
-PHASE_SHUFFLE_CHANCE = 0.0
-DIS_DROPOUT = 0.00
+PHASE_SHUFFLE_CHANCE = 0.1
+DIS_DROPOUT = 0.6
 DIS_MAX_CHANNELS = 32
 DIS_STRIDE = 2
 DIS_KERNEL_SIZE = 1
