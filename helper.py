@@ -1,22 +1,12 @@
 import os
+
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+import tensorflow.keras.backend as K
+
 import numpy as np
-import torch
-import torchaudio
-import torchaudio.functional as AF
-from torchaudio.transforms import InverseMelScale, MelSpectrogram, GriffinLim
-#import nnAudio
-#from nnAudio.Spectrogram import MelSpectrogram, Griffin_Lim
-
-import torch.nn.functional as F
-from torch.autograd import Function
-
-from torchlibrosa import STFT, ISTFT
-
-import numba
 import scipy
-import scipy.optimize
-
-from nnls import NNLSSolver, DTypeMatrix
 
 import librosa
 import librosa.util
@@ -26,135 +16,6 @@ import matplotlib.pyplot as plt
 
 from global_constants import *
 
-over_sample = 4
-res_factor = 0.8
-octaves = 6
-notes_per_octave=10
-
-
-# Plotting functions
-cdict  = {'red':  ((0.0, 0.0, 0.0),
-                   (1.0, 0.0, 0.0)),
-
-         'green': ((0.0, 0.0, 0.0),
-                   (1.0, 0.0, 0.0)),
-
-         'blue':  ((0.0, 0.0, 0.0),
-                   (1.0, 0.0, 0.0)),
-
-         'alpha':  ((0.0, 1.0, 1.0),
-                   (1.0, 0.0, 0.0))
-        }
-
-my_mask = matplotlib.colors.LinearSegmentedColormap('MyMask', cdict)
-plt.register_cmap(cmap=my_mask)
-
-def note_specgram(audio, ax, hop_length, peak=70.0):
-    if hop_length >= 32:
-        C = librosa.cqt(audio, sr=SAMPLE_RATE, hop_length=hop_length, 
-                        bins_per_octave=int(notes_per_octave*over_sample), 
-                        n_bins=int(octaves * notes_per_octave * over_sample),
-                        filter_scale=res_factor, 
-                        fmin=librosa.note_to_hz('C2'))
-        mag, phase = librosa.core.magphase(C)
-        phase_angle = np.angle(phase)
-        phase_unwrapped = np.unwrap(phase_angle)
-        dphase = phase_unwrapped[:, 1:] - phase_unwrapped[:, :-1]
-        dphase = np.concatenate([phase_unwrapped[:, 0:1], dphase], axis=1) / np.pi
-        mag = (librosa.amplitude_to_db(mag**2, amin=1e-13, top_db=peak) / peak) + 1
-        ax.matshow(dphase[::-1, :], cmap=plt.cm.rainbow)
-        ax.matshow(mag[::-1, :], cmap=my_mask)
-
-def find_shape_from(actual, exp_batches, exp_channels, exp_timesteps):
-    # order is important here for dumb reasons
-    if exp_timesteps is None:
-        exp_timesteps = np.max((1, (actual / (exp_channels * exp_batches))))
-    if exp_batches is None:
-        exp_batches = np.max((1, (actual / (exp_channels * exp_timesteps))))
-    if exp_channels is None:
-        exp_channels = np.max((1, (actual / (exp_batches * exp_timesteps))))
-    target = int(exp_batches)*int(exp_channels)*int(exp_timesteps)
-    if target != actual:
-        # try again in case one was None
-        t = np.max((1, (actual / (exp_channels * exp_batches))))
-        b = np.max((1, (actual / (exp_channels * exp_timesteps))))
-        c = np.max((1, (actual / (exp_batches * exp_timesteps))))
-        target = int(t)*int(b)*int(c)
-        if target == actual:
-            return (int(t), int(b), int(c))
-        raise Exception(str(target)+" != "+str(actual))
-    return (int(exp_batches), int(exp_channels), int(exp_timesteps))
-
-# def ensure_size(t, size, channels=1):
-#     if channels == 1:
-#         t = t.flatten()
-#         delta = t.shape[0] - size
-#         if delta < 0:
-#         if type(t) == torch.Tensor:
-#             t = torch.cat((t, torch.zeros(-delta)))
-#         else:
-#             t = np.concatenate((t, np.zeros(-delta)))
-#         elif delta > 0:
-#         t = t[:-delta]
-#     else:
-#         delta = t.shape[1]*channels - size
-#         if delta < 0:
-#             if type(t) == torch.Tensor:
-#                 t = torch.tensor([torch.cat(t[i], torch.zeros(t[i].shape[0])) for i in range(channels)])
-#             else:
-#                 t = [np.concatenate(t[i], np.zeros(len(t[i]))) for i in range(channels)]
-#         elif delta > 0:
-#             t = t[:][:-delta]
-#     return t, delta
-
-class DataBatchPrep(Function):
-    @staticmethod
-    def forward(ctx, inp, exp_batches, exp_channels, exp_timesteps):
-        ctx.set_materialize_grads(False)
-        ctx.exp_batches = exp_batches
-        ctx.exp_channels = exp_channels
-        ctx.exp_timesteps = exp_timesteps
-        #ctx.save_for_backward(torch.empty_like(inp))
-        ctx.save_for_backward(inp)
-        inp_ = inp.detach()
-        return inp.new(prep_data_for_batch_operation(inp_, exp_batches, exp_channels, exp_timesteps, greedy=False, return_shape=False))
-    @staticmethod
-    def backward(ctx, grad_output):
-        if grad_output is None:
-            return None, None, None, None
-        orig = ctx.saved_tensors[0]
-        return orig, None, None, None
-
-def prep_data_for_batch_operation(t, exp_batches, exp_channels, exp_timesteps, greedy=False, return_shape=False):
-    t = torch.flatten(t)
-    actual = t.shape[0]
-    b, c, s = None, None, None
-    delta = 0
-    try:
-        b, c, s = find_shape_from(actual, exp_batches, exp_channels, exp_timesteps)
-    except Exception as e:
-        if greedy:
-            # zero pad the result until it's valid
-            while b is None or c is None or s is None:
-                delta += 1
-                try:
-                    b, c, s = find_shape_from(actual+delta, exp_batches, exp_channels, exp_timesteps)
-                except:
-                    pass
-            t = torch.cat((t, torch.zeros(delta)))
-        else:
-            raise e
-    if greedy:
-        if return_shape:
-            return torch.reshape(torch.as_tensor(t), (b, c, s)), delta, (b,c,s)
-        else:
-            return torch.reshape(torch.as_tensor(t), (b, c, s)), delta
-    else:
-        if return_shape:
-            return torch.reshape(torch.as_tensor(t), (b, c, s)), (b,c,s)
-        else:
-            return torch.reshape(torch.as_tensor(t), (b, c, s))
-#return tf.reshape(t, (N_BATCHES, 2, 1))
 def normalize_audio(audio):
     return F.normalize(audio.flatten(), dim=0)
 def normalize_data(tensor):
@@ -240,13 +101,8 @@ def inst_freq_pytorch_2(phase_angle, time_dim=-1, use_unwrap=True):
     return dphase[1:]
 
 def polar_to_rect(mag, phase_angle):
-<<<<<<< Updated upstream
-    mag = torch.complex(mag, torch.zeros(1, dtype=mag.dtype).to(mag.device))
-    phase = torch.complex(torch.cos(phase_angle), torch.sin(phase_angle))
-=======
     mag = tf.complex(mag, tf.zeros([1], dtype=mag.dtype))
     phase = tf.complex(tf.cos(phase_angle), tf.sin(phase_angle))
->>>>>>> Stashed changes
     return mag * phase
 
 # def stft_to_specgram(stft):
