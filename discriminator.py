@@ -58,9 +58,10 @@ class TADiscriminator(keras.Model):
             x = (x - (k1 - 1) - 1) // s1 + 1
             #y = (y - (k2 - 1) - 1) // s2 + 1
             self.samps = x
+            
+            self.net.append(layers.Conv1D(n, k1, s1, use_bias=True))
+            #self.net.append(layers.BatchNormalization())
             self.net.append(layers.Dropout(DIS_DROPOUT))
-            self.net.append(layers.Conv1D(n, k1, s1, use_bias=False))
-            self.net.append(layers.BatchNormalization())
             self.net.append(layers.LeakyReLU(0.2))
             #v_cprint("Created Conv2d layer #{6} with c={0} n={1} k=({2}, {3}) s=({4}, {5})\tsamps={7}".format(c, n, k1, s1, i, self.samps))
         print("Created", i, "sets of Discriminator layers.")
@@ -69,14 +70,14 @@ class TADiscriminator(keras.Model):
         #self.samps = x*y
         #self.net.append(layers.Conv1D(1, 1, 1, use_bias=False))
         self.net.append(layers.Flatten())
-        self.net.append(layers.Dense(128, use_bias=False))
-        self.net.append(layers.Dense(64, use_bias=False))
-        self.net.append(layers.Dense(32, use_bias=False))
-        self.net.append(layers.Dense(16, use_bias=False))
-        self.net.append(layers.Dense(8, use_bias=False))
-        self.net.append(layers.Dense(1, use_bias=False, activation='sigmoid'))
+        self.net.append(layers.Dense(128))
+        self.net.append(layers.Dense(64))
+        self.net.append(layers.Dense(32))
+        self.net.append(layers.Dense(16))
+        self.net.append(layers.Dense(8))
+        self.net.append(layers.Dense(1))
     
-    def call(self, inp):
+    def dis_fn(self, inp):
         if DIS_MODE == 0:
             raise NotImplementedError
         elif DIS_MODE == 1:
@@ -105,4 +106,7 @@ class TADiscriminator(keras.Model):
         for i, layer in enumerate(self.net):
             verdicts = layer(verdicts)
         
-        return tf.clip_by_value(tf.squeeze(verdicts), clip_value_min=0.001, clip_value_max=0.999)
+        return tf.squeeze(verdicts)
+    
+    def call(self, inputs):
+        return self.dis_fn(inputs)

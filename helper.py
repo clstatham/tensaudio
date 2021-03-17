@@ -34,7 +34,91 @@ def write_normalized_audio_to_disk(sig, fn):
     scipy.io.wavfile.write(fn, SAMPLE_RATE, sig_numpy)
 
 def inst_freq(p):
-    return np.diff(p) / (2.0*np.pi) * len(p)
+    return tf.concat((tf.zeros([1]), tf.experimental.numpy.diff(p) / np.pi), axis=0) #(2.0*np.pi) * len(p)
+
+#https://github.com/magenta/magenta/blob/c1340b2788af9bc193ef23e1ecec3fabf13d0a14/magenta/models/gansynth/lib/spectral_ops.py#L142
+def diff(x, axis=-1):
+    """Take the finite difference of a tensor along an axis.
+    Args:
+        x: Input tensor of any dimension.
+        axis: Axis on which to take the finite difference.
+    Returns:
+        d: Tensor with size less than x by 1 along the difference dimension.
+    Raises:
+        ValueError: Axis out of range for tensor.
+    """
+    shape = x.get_shape()
+    if axis >= len(shape):
+        raise ValueError('Invalid axis index: %d for tensor with only %d axes.' %
+                        (axis, len(shape)))
+
+    begin_back = [0 for unused_s in range(len(shape))]
+    begin_front = [0 for unused_s in range(len(shape))]
+    begin_front[axis] = 1
+
+    size = shape.as_list()
+    size[axis] -= 1
+    slice_front = tf.slice(x, begin_front, size)
+    slice_back = tf.slice(x, begin_back, size)
+    d = slice_front - slice_back
+    return d
+
+#https://github.com/magenta/magenta/blob/c1340b2788af9bc193ef23e1ecec3fabf13d0a14/magenta/models/gansynth/lib/spectral_ops.py#L172
+def unwrap(p, discont=np.pi, axis=-1):
+    """Unwrap a cyclical phase tensor.
+    Args:
+        p: Phase tensor.
+        discont: Float, size of the cyclic discontinuity.
+        axis: Axis of which to unwrap.
+    Returns:
+        unwrapped: Unwrapped tensor of same size as input.
+    """
+    dd = diff(p, axis=axis)
+    ddmod = tf.math.mod(dd + np.pi, 2.0 * np.pi) - np.pi
+    idx = tf.logical_and(tf.equal(ddmod, -np.pi), tf.greater(dd, 0))
+    ddmod = tf.where(idx, tf.ones_like(ddmod) * np.pi, ddmod)
+    ph_correct = ddmod - dd
+    idx = tf.less(tf.abs(dd), discont)
+    ddmod = tf.where(idx, tf.zeros_like(ddmod), dd)
+    ph_cumsum = tf.cumsum(ph_correct, axis=axis)
+
+    shape = p.get_shape().as_list()
+    shape[axis] = 1
+    ph_cumsum = tf.concat([tf.zeros(shape, dtype=p.dtype), ph_cumsum], axis=axis)
+    unwrapped = p + ph_cumsum
+    return unwrapped
+
+#https://github.com/magenta/magenta/blob/c1340b2788af9bc193ef23e1ecec3fabf13d0a14/magenta/models/gansynth/lib/spectral_ops.py#L199
+def gs_instantaneous_frequency(phase_angle, time_axis=-1, use_unwrap=True):
+    """Transform a fft tensor from phase angle to instantaneous frequency.
+    Take the finite difference of the phase. Pad with initial phase to keep the
+    tensor the same size.
+    Args:
+        phase_angle: Tensor of angles in radians. [Batch, Time, Freqs]
+        time_axis: Axis over which to unwrap and take finite difference.
+        use_unwrap: True preserves original GANSynth behavior, whereas False will
+            guard against loss of precision.
+    Returns:
+        dphase: Instantaneous frequency (derivative of phase). Same size as input.
+    """
+    if use_unwrap:
+        # Can lead to loss of precision.
+        phase_unwrapped = unwrap(phase_angle, axis=time_axis)
+        dphase = diff(phase_unwrapped, axis=time_axis)
+    else:
+        # Keep dphase bounded. N.B. runs faster than a single mod-2pi expression.
+        dphase = diff(phase_angle, axis=time_axis)
+        dphase = tf.where(dphase > np.pi, dphase - 2 * np.pi, dphase)
+        dphase = tf.where(dphase < -np.pi, dphase + 2 * np.pi, dphase)
+
+    # Add an initial phase to dphase.
+    size = phase_angle.get_shape().as_list()
+    size[time_axis] = 1
+    begin = [0 for unused_s in size]
+    phase_slice = tf.slice(phase_angle, begin, size)
+    dphase = tf.concat([phase_slice, dphase], axis=time_axis) / np.pi
+    return dphase
+
 
 def polar_to_rect(mag, phase_angle):
     mag = tf.complex(mag, tf.zeros([1], dtype=mag.dtype))
@@ -89,9 +173,9 @@ def hilbert_from_scratch_tf(_u):
 
 def specgram_to_fft(specgram):
     mag = tf.squeeze(specgram[:,0])
-    p = tf.squeeze(specgram[:,1])
-    #phase_angle = torch.cumsum(p * np.pi, -1)
-    phase_angle = mel_to_linear(p * np.pi)
+    f = tf.squeeze(specgram[:,1])
+    p = mel_to_linear(f)
+    phase_angle = tf.cumsum(p * np.pi, -1) # convert from instantaneous frequency to instantaneous phase
     return polar_to_rect(mag, phase_angle)
 
 def audio_to_specgram(audio):
@@ -99,9 +183,10 @@ def audio_to_specgram(audio):
     for i, batch in enumerate(audio):
         ana = hilbert_from_scratch_tf(batch)
         a = tf.math.abs(ana)
-        p = linear_to_mel(tf.math.atan2(tf.math.imag(ana), tf.math.real(ana)) / np.pi)
+        p = tf.math.atan2(tf.math.imag(ana), tf.math.real(ana))
+        f = linear_to_mel(gs_instantaneous_frequency(p, use_unwrap=False))
         #f = inst_freq_pytorch_2(p, use_unwrap=False)
-        out = out.write(i, tf.stack((a, p), axis=-1))
+        out = out.write(i, tf.stack((a, f), axis=-1))
     return out.stack()
 
 def specgram_to_audio(specgram):
@@ -113,9 +198,9 @@ def specgram_to_audio(specgram):
     return out.stack()
 
 
-def generate_input_noise():
+def generate_input_noise(batch_size=BATCH_SIZE, noise_dims=TOTAL_SAMPLES_IN):
     if GEN_MODE in [10]:
         #return torch.randn(1, TOTAL_SAMPLES_IN, 1, requires_grad=True)
         raise NotImplementedError
     else:
-        return tf.random.normal([BATCH_SIZE, TOTAL_SAMPLES_IN], dtype=tf.float32)
+        return tf.random.normal([batch_size, noise_dims], dtype=tf.float32)

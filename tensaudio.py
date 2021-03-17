@@ -24,6 +24,7 @@ from tensorflow import keras
 from tensorflow.keras import layers
 import tensorflow.keras.backend as K
 import tensorflow_io as tfio
+import tensorflow_gan as tfgan
 from matplotlib import animation, cm
 from pygame.locals import *
 
@@ -36,6 +37,7 @@ from hilbert import *
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 devs = tf.config.list_physical_devices('GPU')
+tf.compat.v1.enable_eager_execution()
 tf.config.experimental.set_memory_growth(devs[0], True)
 plt.switch_backend('agg')
 
@@ -144,10 +146,10 @@ class TAMetricsPlotter():
             for entry in range(self.vis_queue.qsize()):
                 key, val = self.vis_queue.get()
                 metrics[key] = val
-            self.total_gen_losses.append(metrics['gen_loss'].numpy())
-            self.total_dis_losses.append(metrics['dis_loss'].numpy())
-            self.total_real_verdicts.append(metrics['real_verdict'].numpy())
-            self.total_fake_verdicts.append(metrics['fake_verdict'].numpy())
+            self.total_gen_losses.append(metrics['gen_loss'])
+            self.total_dis_losses.append(metrics['dis_loss'])
+            self.total_real_verdicts.append(metrics['real_verdict'])
+            self.total_fake_verdicts.append(metrics['fake_verdict'])
             # if len(self.total_gen_losses) > self.graph_x_limit:
             #     self.total_gen_losses = self.total_gen_losses[1:]
             # if len(self.total_dis_losses) > self.graph_x_limit:
@@ -264,142 +266,15 @@ class TAMetricsPlotter():
             
         yield
 
-global VIS
+global VIS, GEN, DIS
 
-class TensAudio(keras.Model):
-    def __init__(self):
-        super().__init__()
+#@tf.function(experimental_relax_shapes=True)
+def generator(inp, mode):
+    return GEN.call(inp, mode)
 
-        print("Creating Generator...")
-        self.gen = TAGenerator()
-        print("Creating Discriminator...")
-        self.dis = TADiscriminator()
-        
-        
-        self.validation_z = generate_input_noise()
-
-    def compile(self):
-        super().compile()
-        self.gen_optim = tf.keras.optimizers.Adam(GEN_LR, BETA)
-        self.dis_optim = tf.keras.optimizers.Adam(DIS_LR, BETA)
-        self.d_loss_metric = keras.metrics.Mean(name="d_loss")
-        self.g_loss_metric = keras.metrics.Mean(name="g_loss")
-        self.real_verdict_metric = keras.metrics.Mean(name="real_verdict")
-        self.fake_verdict_metric = keras.metrics.Mean(name="fake_verdict")
-
-    @property
-    def metrics(self):
-        return [self.d_loss_metric, self.g_loss_metric]
-
-    def save_weights(self):
-        self.gen.save_weights(os.path.join(MODEL_DIR, 'gen.ckpt'))
-        self.dis.save_weights(os.path.join(MODEL_DIR, 'dis.ckpt'))
-    def load_weights(self):
-        self.gen.load_weights(os.path.join(MODEL_DIR, 'gen.ckpt'))
-        self.dis.save_weights(os.path.join(MODEL_DIR, 'dis.ckpt'))
-
-    #@tf.function
-    def training_step(self, batch):
-        batch_size = tf.shape(batch)[0]
-        z = generate_input_noise()[:batch.shape[0]]
-        gen_output = self.gen.gen_fn(z, training=True)
-        combined = tf.concat([gen_output, batch], axis=0)
-        combined_phase_shuffled = random_phase_shuffle(combined, PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE)
-        dis_labels = tf.concat(
-            [tf.zeros(tf.shape(batch)[0], 1), tf.ones(tf.shape(batch)[0], 1)], axis=0
-        )
-        dis_labels += tf.clip_by_value(0.05 * tf.random.uniform(tf.shape(dis_labels)), 0., 1.)
-
-        with tf.GradientTape() as dis_tape:
-            dis_output = self.dis(combined)
-            dis_loss = keras.losses.binary_crossentropy(dis_labels, dis_output)
-        dis_grads = dis_tape.gradient(dis_loss, self.dis.trainable_variables)
-        self.dis_optim.apply_gradients(zip(dis_grads, self.dis.trainable_variables))
-
-        gen_labels = tf.ones((tf.shape(batch)[0], 1))
-
-        with tf.GradientTape() as gen_tape:
-            dis_output_gen = self.dis(self.gen.gen_fn(z, training=True))
-            gen_loss = keras.losses.binary_crossentropy(gen_labels, dis_output_gen)
-        gen_grads = gen_tape.gradient(gen_loss, self.gen.trainable_variables)
-        self.gen_optim.apply_gradients(zip(gen_grads, self.gen.trainable_variables))
-        
-
-
-        self.d_loss_metric.update_state(dis_loss)
-        self.g_loss_metric.update_state(gen_loss)
-        self.real_verdict_metric.update_state(tf.reduce_mean(dis_output[batch_size:], axis=0))
-        self.fake_verdict_metric.update_state(tf.reduce_mean(dis_output[:batch_size], axis=0))
-        return {
-            "d_loss": self.d_loss_metric.result(),
-            "g_loss": self.g_loss_metric.result(),
-            "real_verdict": self.real_verdict_metric.result(),
-            "fake_verdict": self.fake_verdict_metric.result(),
-        }
-
-        # VIS.put_queue(('gen_loss', gen_loss.detach().cpu()))
-        # VIS.put_queue(('dis_loss', dis_loss.detach().cpu()))
-        # VIS.put_queue(('real_verdict', dis_output_real.mean().detach().cpu()))
-        # VIS.put_queue(('fake_verdict', dis_output_fake.mean().detach().cpu()))
-
-    def train(self, ds, epochs=None):
-        if epochs is None:
-            epochs = 99999999999999999999999
-        e = 0
-        while e < epochs:
-            start = time.time()
-            print('='*80)
-            print('Epoch', e, 'started.')
-            for batch in ds:
-                losses = self.training_step(batch)
-                print('D loss:', round(losses['d_loss'].numpy(), 3), '\tG loss:', round(losses['g_loss'].numpy(), 3))
-                VIS.put_queue(('gen_loss', losses['g_loss']))
-                VIS.put_queue(('dis_loss', losses['d_loss']))
-                VIS.put_queue(('real_verdict', losses['real_verdict']))
-                VIS.put_queue(('fake_verdict', losses['fake_verdict']))
-                next(VIS.handle_pygame_events())
-            print()
-            print('Epoch', e, 'finished in', round(time.time() - start, 2), 'seconds.')
-            if e % SAVE_EVERY_EPOCH == 0:
-                print('Generating progress report...')
-                dirname = os.path.join(TRAINING_DIR, datetime.now().strftime("%d.%m.%Y"))
-                if not os.path.isdir(dirname):
-                    os.mkdir(dirname)
-                timestamp = datetime.now().strftime("%H.%M.%S")
-                filename1 = os.path.join(dirname, timestamp+'_'+str(e)+"_progress"+"_EOE.wav")
-                filename2 = os.path.join(dirname, timestamp+'_'+str(e)+"_training"+"_EOE.wav")
-                prog = self.gen_progress()[0]
-                trai = self.gen_random()[0]
-                write_normalized_audio_to_disk(prog, filename1)
-                write_normalized_audio_to_disk(trai, filename2)
-                VIS.put_queue(('validation', prog))
-                VIS.put_queue(('test', trai))
-                #self.generate_progress_report(False, force_send=True)
-                print('Progress report saved at', filename1, '.')
-                print('Training report saved at', filename2, '.')
-            print()
-            e += 1
-    
-    def gen_random(self):
-        return self.gen.gen_fn(generate_input_noise(), training=False)
-    
-    def gen_progress(self):
-        return self.gen.gen_fn(self.validation_z, training=False)
-            
-    
-    # def generate_progress_report(self, save=False, batch_idx=None, force_send=False):
-    #     if not VIS.paused or force_send:
-    #         gen_output_valid = self.gen_progress()
-    #         for i, b in enumerate(gen_output_valid):
-    #             if tf.reduce_max(tf.abs(b)) > 0:
-    #                 VIS.put_queue(('validation', b))
-    #                 break
-
-    #         gen_output_test = self.gen_random()
-    #         for i, b in enumerate(gen_output_test):
-    #             if tf.reduce_max(tf.abs(b)) > 0:
-    #                 VIS.put_queue(('test', b))
-    #                 break
+#@tf.function(experimental_relax_shapes=True)
+def discriminator(inp):
+    return DIS.call(inp)
 
 @tf.function
 def load_sound(fn):
@@ -424,88 +299,254 @@ def load_sound(fn):
     # out = tf.ensure_shape(out, [TOTAL_SAMPLES_OUT])
     return out
 
-def configure_for_performance(ds):
-    ds = ds.cache()
-    ds = ds.shuffle(buffer_size=100)
-    ds = ds.batch(BATCH_SIZE)
-    ds = ds.prefetch(buffer_size=tf.data.AUTOTUNE)
-    return ds
+def input_fn(mode, params):
+    bs = params['batch_size']
+    nd = params['noise_dims']
+    split = 'train' if mode == tf.estimator.ModeKeys.TRAIN else 'test'
+    shuffle = (mode == tf.estimator.ModeKeys.TRAIN)
+    just_noise = (mode == tf.estimator.ModeKeys.PREDICT)
+    noise_ds = (tf.data.Dataset.from_tensors(0).repeat()
+              .map(lambda _: generate_input_noise(bs, nd)))
+    if just_noise:
+        return noise_ds
+    
+    
+    return tf.data.Dataset.zip((noise_ds, ds))
+
+def get_eval_metric_ops_fn(gan_model):
+    real_data_logits = tf.reduce_mean(gan_model.discriminator_real_outputs)
+    gen_data_logits = tf.reduce_mean(gan_model.discriminator_gen_outputs)
+    return {
+        'real_data_logits': tf.metrics.mean(real_data_logits),
+        'gen_data_logits': tf.metrics.mean(gen_data_logits),
+    }
+
+
+
+"""
+    #@tf.function
+    
+
+        # VIS.put_queue(('gen_loss', gen_loss.detach().cpu()))
+        # VIS.put_queue(('dis_loss', dis_loss.detach().cpu()))
+        # VIS.put_queue(('real_verdict', dis_output_real.mean().detach().cpu()))
+        # VIS.put_queue(('fake_verdict', dis_output_fake.mean().detach().cpu()))
+"""
+
 
 if __name__ == "__main__":
-    global VIS, VIS_qlock
+    global VIS, VIS_qlock, GEN, DIS
     print("TensAudio version 0.1 by https://github.com/clstatham")
     #print_global_constants()
 
-    print("Creating Models...")
-    model = TensAudio()
+    print("Creating Dataset...")
     ds = tfio.audio.AudioIODataset.list_files('C:/tensaudio_resources/piano/ta/*.wav', shuffle=True)
     ds = ds.map(load_sound, num_parallel_calls=tf.data.AUTOTUNE)
-    ds = configure_for_performance(ds)
+    ds = ds.cache()
+    ds = ds.shuffle(buffer_size=100, reshuffle_each_iteration=True)
+    ds = ds.batch(BATCH_SIZE, drop_remainder=True)
+    ds = ds.prefetch(buffer_size=tf.data.AUTOTUNE)
+
+    VALIDATION_Z = generate_input_noise()
+
+    print("Creating Generator...")
+    GEN = TAGenerator()
+    print("Creating Discriminator...")
+    DIS = TADiscriminator()
+    
+    # gan_estimator = tfgan.estimator.gan_estimator.GANEstimator(
+    #     model_dir=MODEL_DIR,
+    #     generator_fn=generator,
+    #     discriminator_fn=discriminator,
+    #     generator_loss_fn=tfgan.losses.wasserstein_generator_loss,
+    #     discriminator_loss_fn=tfgan.losses.wasserstein_discriminator_loss,
+    #     params={'batch_size': BATCH_SIZE, 'noise_dims': TOTAL_SAMPLES_IN},
+    #     generator_optimizer=tf.optimizers.Adam(GEN_LR, beta_1=BETA),
+    #     discriminator_optimizer=tf.optimizers.Adam(DIS_LR, beta_1=BETA),
+    #     get_eval_metric_ops_fn=get_eval_metric_ops_fn
+    # )
+
+    gen_optim = keras.optimizers.Adam(GEN_LR, beta_1=BETA)
+    dis_optim = keras.optimizers.Adam(DIS_LR, beta_1=BETA)
+
+    gradient_penalty_weight=10.0
+    gradient_penalty_target=1.0
+
+    def g_loss(fake_logits):
+        return -tf.reduce_mean(fake_logits)
+    
+    def d_loss(real_logits, fake_logits):
+        real_loss = tf.reduce_mean(real_logits)
+        fake_loss = tf.reduce_mean(fake_logits)
+        return fake_loss - real_loss
+
+    def training_step(batch):
+        batch_size = tf.shape(batch)[0]
+        z = generate_input_noise()
+        gen_output = generator(z, mode=tf.estimator.ModeKeys.TRAIN)
+        combined = tf.concat([gen_output, batch], axis=0)
+        #combined_phase_shuffled = random_phase_shuffle(combined, PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE)
+        # dis_labels = tf.concat(
+        #     [tf.zeros(tf.shape(batch)[0], 1), tf.ones(tf.shape(batch)[0], 1)], axis=0
+        # )
+        # dis_labels += tf.clip_by_value(0.05 * tf.random.uniform(tf.shape(dis_labels)), 0., 1.)
+
+        with tf.GradientTape() as dis_tape:
+            dis_output = discriminator(combined)
+            dis_output_real = dis_output[batch_size:]
+            dis_output_fake = dis_output[:batch_size]
+            #dis_loss = tfgan.losses.losses_impl.wasserstein_discriminator_loss(dis_output_real, dis_output_fake)
+            dis_loss = d_loss(dis_output_real, dis_output_fake)
+
+            alpha = tf.random.normal([batch_size, 1], 0.0, 1.0)
+            diff = gen_output - batch
+            interpolated = batch + alpha * diff
+
+            with tf.GradientTape() as gp_tape:
+                gp_tape.watch(interpolated)
+                # 1. Get the discriminator output for this interpolated image.
+                pred = discriminator(interpolated)
+
+            # 2. Calculate the gradients w.r.t to this interpolated image.
+            grads = gp_tape.gradient(pred, [interpolated])[0]
+            # 3. Calculate the norm of the gradients.
+            norm = tf.sqrt(tf.reduce_sum(tf.square(grads), axis=1) + EPSILON)
+            gp = tf.reduce_mean((norm - 1.0) ** 2)
+            dis_loss += gp * gradient_penalty_weight
+        dis_grads = dis_tape.gradient(dis_loss, DIS.trainable_variables)
+        dis_optim.apply_gradients(zip(dis_grads, DIS.trainable_variables))
+
+        #gen_labels = tf.ones((tf.shape(batch)[0], 1))
+
+        with tf.GradientTape() as gen_tape:
+            dis_output_gen = discriminator(generator(z, mode=tf.estimator.ModeKeys.TRAIN))
+            #gen_loss = tfgan.losses.losses_impl.wasserstein_generator_loss(dis_output_gen)
+            gen_loss = g_loss(dis_output_gen)
+        gen_grads = gen_tape.gradient(gen_loss, GEN.trainable_variables)
+        gen_optim.apply_gradients(zip(gen_grads, GEN.trainable_variables))
+        
+        return {
+            "d_loss": dis_loss.numpy(),
+            "g_loss": gen_loss.numpy(),
+            "real_verdict": tf.reduce_mean(dis_output_real, axis=0).numpy(),
+            "fake_verdict": tf.reduce_mean(dis_output_fake, axis=0).numpy(),
+        }
+
+    def train(epochs=None):
+        if epochs is None:
+            epochs = 99999999999999999999999
+        e = 0
+        while e < epochs:
+            start = time.time()
+            print('='*80)
+            print('Epoch', e, 'started.')
+            for batch in ds:
+                losses = training_step(batch)
+                #gan_estimator.train(lambda: input_fn(tf.estimator.ModeKeys.TRAIN, gan_estimator.params), max_steps=4)
+                #metrics = gan_estimator.evaluate(lambda: input_fn(tf.estimator.ModeKeys.EVAL, gan_estimator.params), steps=1)
+                print("G Loss:", round(losses['g_loss'], 3), "\tD Loss:", round(losses['d_loss'], 3))
+                VIS.put_queue(('gen_loss', losses['g_loss']))
+                VIS.put_queue(('dis_loss', losses['d_loss']))
+                VIS.put_queue(('real_verdict', losses['real_verdict']))
+                VIS.put_queue(('fake_verdict', losses['fake_verdict']))
+                next(VIS.handle_pygame_events())
+            print()
+            print('Epoch', e, 'finished in', round(time.time() - start, 2), 'seconds.')
+            print()
+
+            if e % SAVE_EVERY_EPOCH == 0:
+                print('Generating progress report...')
+                dirname = os.path.join(TRAINING_DIR, datetime.now().strftime("%d.%m.%Y"))
+                if not os.path.isdir(dirname):
+                    os.mkdir(dirname)
+                timestamp = datetime.now().strftime("%H.%M.%S")
+                filename1 = os.path.join(dirname, timestamp+'_'+str(e)+"_progress"+"_EOE.wav")
+                filename2 = os.path.join(dirname, timestamp+'_'+str(e)+"_training"+"_EOE.wav")
+                prog = generator(VALIDATION_Z, mode=None)[0]
+                trai = generator(generate_input_noise(), mode=None)[0]
+                write_normalized_audio_to_disk(prog, filename1)
+                write_normalized_audio_to_disk(trai, filename2)
+                VIS.put_queue(('validation', prog))
+                VIS.put_queue(('test', trai))
+                #self.generate_progress_report(False, force_send=True)
+                print('Progress report saved at', filename1, '.')
+                print('Training report saved at', filename2, '.')
+
+            e += 1
+            
+        
+        # def gen_random(self):
+        #     return generator(generate_input_noise(), False)
+        
+        # def gen_progress(self):
+        #     return generator(self.validation_z, False)
+                
+        
+        # def generate_progress_report(self, save=False, batch_idx=None, force_send=False):
+        #     if not VIS.paused or force_send:
+        #         gen_output_valid = self.gen_progress()
+        #         for i, b in enumerate(gen_output_valid):
+        #             if tf.reduce_max(tf.abs(b)) > 0:
+        #                 VIS.put_queue(('validation', b))
+        #                 break
+
+        #         gen_output_test = self.gen_random()
+        #         for i, b in enumerate(gen_output_test):
+        #             if tf.reduce_max(tf.abs(b)) > 0:
+        #                 VIS.put_queue(('test', b))
+        #                 break
+
+    
 
     print("Creating Test Audio...")
     inp = next(iter(ds))
     gram = audio_to_specgram(inp)
-    #stft = audio_to_stftgram(inp, DIS_N_FFT, DIS_HOP_LEN)
-    # print(stft.size())
-    # print(gram[:,0].min(), gram[:,0].max())
-    # print(gram[:,1].min(), gram[:,1].max())
-    # print(gram[:,0].sum())
-    # print(gram[:,1].sum())
+    # #stft = audio_to_stftgram(inp, DIS_N_FFT, DIS_HOP_LEN)
+    # # print(stft.size())
+    # # print(gram[:,0].min(), gram[:,0].max())
+    # # print(gram[:,1].min(), gram[:,1].max())
+    # # print(gram[:,0].sum())
+    # # print(gram[:,1].sum())
     audio1 = specgram_to_audio(gram)
-    #audio2 = stftgram_to_audio(stft, DIS_HOP_LEN)
-    audio3 = random_phase_shuffle(inp, PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE)
-    #audio4 = F.dropout(audio3, DIS_DROPOUT, training=True, inplace=False)
+    # #audio2 = stftgram_to_audio(stft, DIS_HOP_LEN)
+    # audio3 = random_phase_shuffle(inp, PHASE_SHUFFLE_CHANCE, PHASE_SHUFFLE)
+    # #audio4 = F.dropout(audio3, DIS_DROPOUT, training=True, inplace=False)
  
     write_normalized_audio_to_disk(inp[0], './original audio.wav')
     write_normalized_audio_to_disk(audio1[0], "./specgram.wav")
-    # write_normalized_audio_to_disk(audio2.view(-1), "./stftgram.wav")
-    write_normalized_audio_to_disk(audio3[0], "./specgram_shuffled.wav")
-    # write_normalized_audio_to_disk(audio4.view(-1), "./specgram_shuffled_dropout.wav")
+    # # write_normalized_audio_to_disk(audio2.view(-1), "./stftgram.wav")
+    # write_normalized_audio_to_disk(audio3[0], "./specgram_shuffled.wav")
+    # # write_normalized_audio_to_disk(audio4.view(-1), "./specgram_shuffled_dropout.wav")
 
-    # print("Real audio specgram:")
-    # print("Mag min/max/mean:", gram[:,0].min(), gram[:,0].max(), gram[:,0].mean())
-    # print("Phase min/max/mean:", gram[:,1].min(), gram[:,1].max(), gram[:,1].mean())
+    # # print("Real audio specgram:")
+    print("Mag min/max/mean:", tf.reduce_min(gram[:,:,0]), tf.reduce_max(gram[:,:,0]), tf.reduce_mean(gram[:,:,0]))
+    print("Phase min/max/mean:", tf.reduce_min(gram[:,:,1]), tf.reduce_max(gram[:,:,1]), tf.reduce_mean(gram[:,:,1]))
 
-    print("Initializing 'lazy' modules...")
+    # print("Initializing 'lazy' modules...")
 
-    
-
-    #noise = generate_input_noise()#[-2:]
-    model.compile()
-    #model.build(list(tf.shape(inp)))
-    #model.fit(ds.take(1), epochs=1)
-    #model.training_step(inp)
-    #model.summary()
-
-    # gen_output = model.gen(noise)
-    # dis_output_fake = model.dis(gen_output)
-    # dis_output_real = model.dis(inp)
-    # #print("Got", dis_output[0].item(), "and", dis_output[1].item(), "from the discriminator on initial pass.")
-    # print("Got output size", tuple(dis_output_fake.shape), "from discriminator.")
-    # print("Real verdict:", tf.reduce_mean(dis_output_real).numpy())
-    # print("Fake verdict:", tf.reduce_mean(dis_output_fake).numpy())
 
     print("Initializing Visualizer...")
-    VIS = TAMetricsPlotter(50*4)
+    VIS = TAMetricsPlotter(25*3)
     VIS_qlock = Lock()
 
-    print("Attempting to load model weights...")
-    try:
-        model.load_weights()
-    except Exception as e:
-        print("Couldn't load weights:", e)
+    # print("Attempting to load model weights...")
+    # try:
+    #     model.load_weights()
+    # except Exception as e:
+    #     print("Couldn't load weights:", e)
 
     print("Initialization complete! Starting...")
     time.sleep(1)
     
-    #trainer.tune(model, data_mod)
     try:
-        model.train(ds, epochs=None)
+        train(epochs=None)
     except KeyboardInterrupt:
-        print('Saving...')
-        model.save_weights()
-        print('Generating final progress report...')
-        write_normalized_audio_to_disk(model.gen_progress()[0], './out.wav')
+        print("Saving...")
+        GEN.save_weights(os.path.join(MODEL_DIR, 'gen.ckpt'))
+        DIS.save_weights(os.path.join(MODEL_DIR, 'dis.ckpt'))
+        prog = generator(VALIDATION_Z, mode=None)[0]
+        write_normalized_audio_to_disk(prog, './out.wav')
+        pass
 
     print("Done!")
 

@@ -28,12 +28,51 @@ from global_constants import *
 #     x = x.view(batch_size, long_channel_len, long_width)
 
 #     return x
+def custom_he_init(shape, slope=1.0):
+    fan_in = np.prod(shape[:-1])
+    return np.sqrt(2. / ((1. + slope**2) * fan_in))
+
+#kernel_size = kernel_size + [x.shape.as_list()[3], filters]
+
+#https://github.com/magenta/magenta/blob/c1340b2788af9bc193ef23e1ecec3fabf13d0a14/magenta/models/gansynth/lib/layers.py#L30
+def pixel_norm(images, epsilon=1.0e-8):
+    a = tf.math.rsqrt(tf.reduce_mean(tf.math.square(images), axis=-1, keepdims=True) + epsilon)
+    if tf.reduce_all(tf.math.is_finite(a)):
+        return images * a
+    else:
+        return images
+
+class TAConv1D(layers.Layer):
+    def __init__(self, filters, kernel_size, strides=1, use_bias=False, **kwargs):
+        self.filters = filters
+        self.kernel_size = [kernel_size]
+        self.strides = strides
+        self.use_bias = use_bias
+
+        super().__init__(True, 'TAConv1D', **kwargs)
+    def build(self, input_shape):
+        shape = self.kernel_size + [input_shape[-1], self.filters]
+        kernel_scale = custom_he_init(self.kernel_size, 0.0)
+        post_scale, init_scale = kernel_scale, 1.0
+        self.kernel = self.add_weight(name='kernel', shape=shape, initializer=keras.initializers.random_normal(stddev=kernel_scale), trainable=True)
+        super().build(input_shape)
+
+    #@tf.function(experimental_relax_shapes=True)
+    def call(self, x):
+        return pixel_norm(tf.nn.leaky_relu(K.conv1d(x, kernel=self.kernel, strides=self.strides), 0.2))
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[:-1] + (self.filters,)
+
+
+
 
 class SubpixelUpscaling1D(keras.layers.Layer):
     def __init__(self, r):
         super().__init__(trainable=False)
         self.r = r
-    @tf.function
+    #@tf.function(experimental_relax_shapes=True)
+
     def call(self, x):
         _, _, rc = x.get_shape()
         assert rc % self.r == 0
@@ -42,6 +81,75 @@ class SubpixelUpscaling1D(keras.layers.Layer):
         y = tf.batch_to_space(y, [self.r], [[0,0]])
         y = tf.transpose(y, [2,1,0])
         return y
+
+class TAInitialGeneratorModule(layers.Layer):
+    def __init__(self, filters, kernel_size, input_shape):
+        super().__init__(True, 'TAInitialGeneratorModule', input_shape=input_shape)
+        self.filters = filters
+        #self.dns = layers.Dense(input_shape[1])
+        self.conv2d_1 = TAConv1D(filters, input_shape[1]-1)
+        self.conv2d_2 = TAConv1D(filters, kernel_size)
+        #self.bn = layers.BatchNormalization(momentum=0.9)
+        #self.pad = layers.ZeroPadding2D((1, input_shape[1]-1))
+
+    #@tf.function(experimental_relax_shapes=True)
+    def call(self, x):
+        #x = self.dns(x)
+        x = tf.expand_dims(x, -1)
+        x = pixel_norm(x)
+        #x = self.pad(x)
+        x = self.conv2d_1(x)
+        #x = self.conv2d_2(x)
+        return x
+
+class TAGeneratorModule(layers.Layer):
+    def __init__(self, filters, kernel_size, scale1=2, scale2=2):
+        super().__init__(True, 'TAGeneratorModule')
+        self.filters = filters
+        self.spu = SubpixelUpscaling1D(scale2)
+        self.upscale = layers.UpSampling1D(scale1)
+        self.conv_1 = TAConv1D(filters, kernel_size)
+        self.conv_2 = TAConv1D(filters, kernel_size*2)
+        self.conv_3 = TAConv1D(2, kernel_size)
+    
+    #@tf.function(experimental_relax_shapes=True)
+    def call(self, x):
+        x = self.upscale(x)
+        x = self.spu(x)
+        x = self.conv_1(x)
+        x = self.spu(x)
+        # x = self.conv_2(x)
+        # x = self.spu(x)
+        #x = self.conv_3(x)
+        return x
+
+class TAFinalGeneratorModule(layers.Layer):
+    def __init__(self):
+        super().__init__(True, 'TAFinalGeneratorModule')
+    
+    #@tf.function(experimental_relax_shapes=True)
+    def call(self, x):
+        x_split = tf.split(x, x.shape[-1]//2, axis=-1)
+        y = tf.reduce_mean(tf.stack(x_split, -1), -1)
+        # lods = _lods.copy()
+        # new_lods = []
+        # alphas = K.softmax(K.arange(0.1, 1.0, 1.0/len(lods)))
+        # for i, lod in enumerate(lods):
+        #     if lod.shape[-1] == lods[-1].shape[-1]:
+        #         lods[i] *= alphas[i]
+        #         lods[i] = tf.reshape(lods[i], [lods[i].shape[0], -1])
+        #         factor = int(np.ceil(2*TOTAL_SAMPLES_OUT / lods[i].shape[-1]))
+        #         if factor <= 1:
+        #             new_lods += [lods[i][:, :TOTAL_SAMPLES_OUT*2]]
+        # y = tf.stack(new_lods, -1)
+        # y = tf.reduce_sum(y, -1)
+        #y = lods[-1]
+        #y = tf.nn.depth_to_space(y, 16)
+        #y = tf.reshape(y, [y.shape[0], 2, -1])
+        #y = tf.expand_dims(x, 1)
+        #y = SubpixelUpscaling1D(y.shape[-1]//2)(y)
+        return y
+
 
 class TAGenerator(keras.Model):
     def __init__(self, **kwargs):
@@ -138,246 +246,94 @@ class TAGenerator(keras.Model):
 
         dummy = tf.Variable(generate_input_noise(), trainable=False)
 
-        self.dim = 16
-        dim_mul = 16
-
-        self.net = [
-            dns(self.n_channels*self.dim*dim_mul, use_bias=False, input_shape=[TOTAL_SAMPLES_IN]),
-        ]
-        dummy = self.net[0](dummy)
-        #v_cprint("Created Linear layer.", self.initial_layers.input_shape, ">", self.initial_layers.output_shape)
-        self.net.append(layers.Dropout(GEN_DROPOUT))
-        dummy = self.net[-1](dummy)
+        
 
 
         self.n_sets = 0
-        self.blur_amount = 1
+        self.max_sets = 4
+        self.base_scale = 2
+        self.max_scale = 4
         
         prob = 0.01
         s_us = 2
-        k_us = 444
+        k_us = 3
         k_div = 8
         s_ds = 2
         k_ds = 2
-        
-        
 
-        rnn_index = 0
+        self.dim = 16
+        dim_mul = 2
 
-        if self.is_2d:
-            dummy = tf.reshape(dummy, [dummy.shape[0], self.dim, 4, -1])
-        else:
-            #dummy = tf.reshape(dummy, [dummy.shape[0], self.dim, -1])
-            self.net.append(layers.Reshape([self.dim, -1]))
-            dummy = self.net[-1](dummy)
-        samps_post_ds = tf.size(dummy)
+        self.net = [
+            dns(self.n_channels*self.dim*dim_mul, use_bias=False, input_shape=[TOTAL_SAMPLES_IN]),
+            #dns(TOTAL_SAMPLES_OUT, use_bias=False, input_shape=[TOTAL_SAMPLES_IN]),
+        ]
+        dummy = self.net[-1](dummy)
 
-        while tf.size(dummy) // dummy.shape[0] < self.total_samp_out:
-            self.net.append(us(dummy.shape[-1]*dim_mul, k_us, s_us, use_bias=False, padding='same', kernel_initializer=self.initializer, trainable=False)) # padding_mode = 'reflect'
+        #lods = []
+        self.net.append(TAInitialGeneratorModule(self.dim, k_us, dummy.shape))
+        dummy = self.net[-1](dummy)
+        while dummy.shape[-2] < TOTAL_SAMPLES_OUT:
+        #while self.n_sets < self.max_sets:
+            self.net.append(TAGeneratorModule(dummy.shape[-1]*dim_mul, k_us, self.get_scale(self.n_sets), 2))
+            #self.net.append(TAGeneratorModule(dummy.shape[-1]*dim_mul, k_us, 2, 2))
             dummy = self.net[-1](dummy)
-            self.net.append(norm(momentum=0.9))
-            dummy = self.net[-1](dummy)
-            self.net.append(layers.ReLU())
-            dummy = self.net[-1](dummy)
-            self.net.append(SubpixelUpscaling1D(dummy.shape[-1]//self.n_channels))
-            dummy = self.net[-1](dummy)
-            while tf.size(dummy) // dummy.shape[0] > self.total_samp_out * 2:
-                self.net.append(ds(dummy.shape[-1], k_us, 2, use_bias=False, kernel_initializer=self.initializer, trainable=False))
+            pool_scale = dummy.shape[-2]//TOTAL_SAMPLES_OUT
+            if pool_scale > 1:
+                self.net.append(layers.AvgPool1D(k_us, pool_scale, padding='valid'))
                 dummy = self.net[-1](dummy)
-                self.net.append(norm(momentum=0.9))
-                dummy = self.net[-1](dummy)
-                self.net.append(layers.Activation(tf.nn.tanh))
-                dummy = self.net[-1](dummy)
-            dim_mul //= 2
-            dim_mul = max(dim_mul, 1)
-            k_us //= dim_mul
-            k_us = max(k_us, 1)
+
+            # self.net.append(us(dummy.shape[-1]*dim_mul, k_us, s_us, use_bias=False, padding='same', kernel_initializer=self.initializer, trainable=False)) # padding_mode = 'reflect'
+            # dummy = self.net[-1](dummy)
+            # self.net.append(norm(momentum=0.9))
+            # dummy = self.net[-1](dummy)
+            # self.net.append(layers.ReLU())
+            # dummy = self.net[-1](dummy)
+            # self.net.append(SubpixelUpscaling1D(dummy.shape[-1]//self.n_channels))
+            # dummy = self.net[-1](dummy)
+            # while tf.size(dummy) // dummy.shape[0] > self.total_samp_out * 2:
+            #     self.net.append(layers.AveragePooling1D(2, 2, trainable=False, padding='valid'))
+            #     dummy = self.net[-1](dummy)
+            #     self.net.append(norm(momentum=0.9))
+            #     dummy = self.net[-1](dummy)
+            #     self.net.append(layers.Activation(tf.nn.tanh))
+            #     dummy = self.net[-1](dummy)
+
+            # self.net.append(layers.Lambda(lambda x: x))
+            # dummy = self.net[-1](dummy)
+            #lods.append(dummy)
+
+            # dim_mul //= 2
+            # dim_mul = max(dim_mul, 2)
+            # k_us //= dim_mul
+            # k_us = max(k_us, 1)
             self.n_sets += 1
-
-
-        """
-        n = 1
-        while n**2 < GEN_MAX_CHANNELS:
-            self.conv_layers.append(nn.Conv1d(n, n*2, 1, 1, groups=min(2,n), bias=False))
-            dummy = self.conv_layers[-1](dummy)
-            n *= 2
-        print("Created {} Convolution layers until n={}.".format(len(self.conv_layers), n))
+        print("Created", self.n_sets, "sets of Generator layers.")
         
-        while samps_post_ds < self.total_samp_out or self.n_sets < GEN_MIN_LAYERS:
-            self.n_sets += 1
-            #k_us = GEN_KERNEL_SIZE_UPSCALING * self.n_sets + 1
-            #k_ds = GEN_KERNEL_SIZE_DOWNSCALING * max(self.n_sets // 25, 1)
-            #n = min(GEN_MAX_CHANNELS, (2**(self.n_sets)))
-            c = min(n**2, GEN_MAX_CHANNELS)
-            v_cprint("="*80)
-
-            # if samps_post_ds >= self.total_samp_out:
-            #     s_us = 1x
-            # else:
-            #     s_us = GEN_STRIDE_UPSCALING
-
-            #if mode == 'specgram':
-            if False:
-                y = y
-                x = x
-                samps_post_ds = y * x * n
-                self.conv_layers.append(nn.Conv2d(c, n, kernel_size=1, bias=False, groups=1))
-                self.conv_layers.append(nn.BatchNorm2d(n))
-                self.conv_layers.append(nn.LeakyReLU(0.1, False))
-                print("Created Upscaling layer with c={0} n={1} s_us={2} k_us={3}".format(c, n, s_us, k_us))
-            else:
-                orig_shape = dummy.shape
-                if dummy.numel() // dummy.shape[0] <= GEN_MAX_LIN_FEATURES:
-                    dummy = dummy.contiguous().view(BATCH_SIZE, -1)
-                    self.conv_layers.append(nn.LazyLinear(dummy.shape[-1], bias=self.use_bias))
-                    dummy = self.conv_layers[-1](dummy)
-                    dummy = dummy.view(dummy.shape[0], orig_shape[1], -1)
-                    v_cprint("Created Linear layer with", samps_post_ds, "output samples.")
-                
-                self.conv_layers.append(us(n, c, k_us, s_us, groups=n, bias=self.use_bias))
-                #he_init(self.conv_layers[-1])
-                #self.conv_layers[-1].weight.data.copy_(he_init(self.conv_layers[-1].weight))
-                #icnr2d(self.conv_layers[-1].weight, he_init)
-                dummy = self.conv_layers[-1](dummy)
-                v_cprint("Created Upscaling layer.", samps_post_ds, "<", dummy.numel() // BATCH_SIZE)
-                samps_post_us = dummy.numel() // dummy.shape[0]
-
-                self.conv_layers.append(norm(c))
-                dummy = self.conv_layers[-1](dummy)
-                v_cprint("Created Normalization layer with", c, "channels.")
-
-                self.conv_layers.append(nn.Sigmoid())
-                dummy = self.conv_layers[-1](dummy)
-                v_cprint("Created Activation layer.")
-                
-                self.conv_layers.append(ds(c, n, 1, 2, groups=n, bias=self.use_bias))
-                dummy = self.conv_layers[-1](dummy)
-                v_cprint("Created Grouped Convolution layer with", n, "groups.") 
-                self.conv_layers.append(ds(n, n, 2, 1, groups=n, bias=self.use_bias))
-                dummy = self.conv_layers[-1](dummy)
-                v_cprint("Created Grouped Convolution layer with", n, "groups.")  
-                self.conv_layers.append(ds(n, c, 1, 1, groups=n, bias=self.use_bias))
-                dummy = self.conv_layers[-1](dummy)
-                v_cprint("Created Grouped Convolution layer with", n, "groups.")            
-                
-                samps_post_us = dummy.numel() // dummy.shape[0]
-
-                self.conv_layers.append(norm(c))
-                dummy = self.conv_layers[-1](dummy)
-                v_cprint("Created Normalization layer with", c, "channels.")
-
-                
-                # self.conv_layers.append(nn.ReplicationPad2d((self.blur_amount,0,self.blur_amount,0)))
-                # dummy = self.conv_layers[-1](dummy)
-                # v_cprint("Created Padding layer.")
-
-                # self.conv_layers.append(nn.AvgPool2d(3, 1))
-                # dummy = self.conv_layers[-1](dummy)
-                # v_cprint("Created Adaptive Pooling layer.")
-                
-
-
-                if samps_post_us >= self.total_samp_out * 2:
-                    #factor = max(min(dummy.shape[-1], dummy.shape[-2]) - 1, 1)
-                    #factor = max(dummy.shape[-1] - 1, 1)
-                    self.conv_layers.append(nn.Conv1d(c, c, 1, 2))
-                    v_cprint("Created Conv1d layer with stride 2.")
-                    dummy = self.conv_layers[-1](dummy)
-                    
-
-                # orig_shape = dummy.shape
-                # dummy = dummy.view(dummy.shape[0], dummy.shape[1]*4, -1)
-                # self.conv_layers.append(nn.LSTM(dummy.shape[-1], dummy.shape[-1], 1, bias=False, batch_first=True))
-                # v_cprint("Created RNN layer with", self.conv_layers[-1].input_size, "input features and", self.conv_layers[-1].hidden_size, "hidden features.")
-                # dummy, state = self.conv_layers[-1](dummy)
-                # dummy = dummy.contiguous().view(orig_shape)
-                # self.rnn_states[rnn_index] = (state[0].to(self.device).detach(), state[1].to(self.device).detach())
-                # rnn_index += 1
-                #self.rnn_states[len(self.conv_layers)] = dummy_state.to(self.device)
-                
-                self.conv_layers.append(shuf(n//2))
-                dummy = self.conv_layers[-1](dummy)
-                #self.conv_layers.append(TA)
-                v_cprint("Created Shuffle layer with scaling factor {}.".format(n//2))
-
-                self.conv_layers.append(ds(dummy.shape[1], n, 1, 1, bias=False))
-                dummy = self.conv_layers[-1](dummy)
-                v_cprint("Created Downscaling layer from {} to {} channels.".format(self.conv_layers[-1].in_channels, n))
-
-
-                samps_post_ds = dummy.shape[-1] * self.n_channels
-                if samps_post_ds < self.total_samp_out:
-                    self.conv_layers.append(nn.ReLU())
-                    dummy = self.conv_layers[-1](dummy)
-                    v_cprint("Created Activation layer.")
-                
-                
-                # if ds.__name__.find('2d') != -1:
-                #     # samps_post_ds = int((np.sqrt(samps_post_us) - (k_ds-1) - 1) // s_ds + 1)**2
-                #     # samps_post_ds = min(samps_post_ds, self.total_samp_out)
-                #     x = (x - (1    - 1) - 1) // 1    + 1
-                #     y = (y - (k_ds - 1) - 1) // s_ds + 1
-                #     x = min(x, self.n_fft)
-                #     y = min(y, self.total_samp_out)
-                #     samps_post_ds = x*y
-                #     self.conv_layers.append(ds(c, c, (1, k_ds), (1, s_ds), groups=c, bias=self.use_bias))
-                #     self.conv_layers.append(pool((x, y)))
-                # elif ds.__name__.find('1d') != -1:
-                #     y = int((samps_post_us - (k_ds-1) - 1) // s_ds + 1)
-                #     y = min(y, self.total_samp_out)
-                #     samps_post_ds = y
-                #     self.conv_layers.append(ds(c, c, k_ds, s_ds, groups=c, bias=self.use_bias))
-                #     self.conv_layers.append(pool(samps_post_ds))
-                # v_cprint("Created Downscaling layer.", samps_post_us, ">", samps_post_ds)
-                
-                # if y*x < self.total_samp_out*self.n_fft:
-                #     self.conv_layers.append(nn.ReLU(inplace=False))
-                #     v_cprint("Created Activation layer.")
-
-                # self.conv_layers.append(norm(c))
-                # v_cprint("Created Normalization layer with", c, "channels.")
-
-            
-            if self.n_sets == 1:
-                self.n_layers_per_set = len(self.conv_layers)
-            
-            
-            if samps_post_ds < 1:
-                raise RuntimeError("Generator reached 0 samples after this many sets:", self.n_sets)
-            
-            v_cprint("Samples so far:", samps_post_ds)
-            v_cprint("Still need:", self.total_samp_out - samps_post_ds)
-        """
-        
-        print("Created", self.n_sets, "sets of generator processing layers.")
-        
-        # if self.is_2d:
-        #     dummy = tf.reshape(dummy, [self.n_channels, self.n_fft-1, -1])
-        # else:
-        #     dummy = tf.reshape(dummy, [-1, 1])
-
-        # self.net += [SubpixelUpscaling1D()]
-        # dummy = self.net[-1](dummy)
-        
+        self.final_layer = TAFinalGeneratorModule()
+        dummy = self.final_layer(dummy)
         v_cprint("Created final layers.")
         v_cprint("Final shape:", list(dummy.shape))
 
         # if self.is_2d:
         #     dummy = torch.cat((dummy, torch.zeros((dummy.shape[0], dummy.shape[1], 1, dummy.shape[3])).to(dummy.device)), -2)
-        self.net = keras.Sequential(self.net)
-        for layer in self.net.layers:
+        #self.net = keras.Sequential(self.net)
+        for layer in self.net:
             if not layer.trainable:
                 layer.trainable = True
-        # self.net.call(generate_input_noise())
-        # self.net.summary()
-        print()
+        #self.net.call(generate_input_noise())
+        #self.net.summary()
+        #self.summary()
+
+    def get_scale(self, step):
+        return min(self.max_scale, self.base_scale ** step)
 
     def sanity_check(self, data):
         # if torch.isnan(data).any():
         #     raise RuntimeError("Data is NaN!")
         pass
 
-    #@tf.function
+    #@tf.function(experimental_relax_shapes=True)
     def run_conv_net(self, inp, mode, training):
         #print(inp.min().item(), inp.max().item(), inp.mean().item())
         data = normalize_negone_one(tf.cast(inp, tf.float32))
@@ -386,7 +342,12 @@ class TAGenerator(keras.Model):
 
         self.sanity_check(data)
 
-        post_final = self.net(data, training=training)
+        lods = []
+        for i, layer in enumerate(self.net):
+            data = layer(data, training=training)
+            # if layer.__class__.__name__.find('Lambda') != -1:
+            #     lods.append(data)
+        post_final = self.final_layer(data)
 
         self.sanity_check(post_final)
         if mode == 'mel' and DIS_MODE == 2:
@@ -445,6 +406,10 @@ class TAGenerator(keras.Model):
         
         return ret
     
-    def gen_fn(self, inputs, training):
+    #@tf.function(experimental_relax_shapes=True)
+    def gen_fn(self, inputs, training=True):
         return self.run_conv_net(inputs, 'specgram', training)[:, :TOTAL_SAMPLES_OUT]
-        
+    
+    #@tf.function(experimental_relax_shapes=True)
+    def call(self, inputs, mode):
+        return self.gen_fn(inputs, mode == tf.estimator.ModeKeys.TRAIN)
