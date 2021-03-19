@@ -121,7 +121,7 @@ def gs_instantaneous_frequency(phase_angle, time_axis=-1, use_unwrap=True):
 
 
 def polar_to_rect(mag, phase_angle):
-    mag = tf.complex(mag, tf.zeros([1], dtype=mag.dtype))
+    mag = tf.complex(mag, tf.convert_to_tensor(0, dtype=mag.dtype))
     phase = tf.complex(tf.cos(phase_angle), tf.sin(phase_angle))
     return mag * phase
 
@@ -174,8 +174,8 @@ def hilbert_from_scratch_tf(_u):
 def specgram_to_fft(specgram):
     mag = tf.squeeze(specgram[:,0])
     f = tf.squeeze(specgram[:,1])
-    p = mel_to_linear(f)
-    phase_angle = tf.cumsum(p * np.pi, -1) # convert from instantaneous frequency to instantaneous phase
+    f = mel_to_linear(f)
+    phase_angle = tf.cumsum(f * np.pi, -1) # convert from instantaneous frequency to instantaneous phase
     return polar_to_rect(mag, phase_angle)
 
 def audio_to_specgram(audio):
@@ -193,7 +193,7 @@ def specgram_to_audio(specgram):
     out = tf.TensorArray(tf.float32, size=tf.shape(specgram)[0])
     for i in range(tf.shape(specgram)[0]):
         fft = specgram_to_fft(specgram[i])
-        invhilb = hilbert_from_scratch_tf(fft)
+        invhilb = hilbert_from_scratch_tf(-fft)
         out = out.write(i, tf.math.imag(invhilb))
     return out.stack()
 

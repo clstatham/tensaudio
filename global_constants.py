@@ -19,7 +19,7 @@ VIS_HOP_LEN = VIS_N_FFT//4
 SLEEP_TIME = 0
 MAX_ITERS_PER_SEC = 0
 
-SAVE_EVERY_EPOCH = 25
+SAVE_EVERY_EPOCH = 10
 SAVE_EVERY_BATCHES = 54
 
 VERBOSITY_LEVEL = 1 # 0, 1, 2
@@ -33,7 +33,9 @@ DIS_LR = 0.0004
 BETA = 0.0
 #GEN_MOMENTUM = 0.01
 
-BATCH_SIZE = 32 # lower = faster but lower quality training (must be 2 or greater)
+BATCH_SIZE = 35 # lower = faster but lower quality training (must be 2 or greater)
+N_CRITIC = 1
+N_GEN = 3
 
 # If you change ANY of the following values, you MUST empty
 # MODEL_DIR/gen_ckpts folder or the generator model will give
@@ -91,8 +93,8 @@ DIS_MODE = 3            # 0 = Direct mode
                         # 1 = FFT mode
                         # 2 = Mel mode
                         # 3 = Specgram mode
-REAL_LABEL = 1.
-FAKE_LABEL = 0.
+REAL_LABEL = -1.
+FAKE_LABEL = 1.
 PHASE_SHUFFLE = 0.03
 PHASE_SHUFFLE_CHANCE = 0.1
 DIS_DROPOUT = 0.2
@@ -102,6 +104,7 @@ DIS_KERNEL_SIZE = 1
 DIS_N_FFT = VIS_N_FFT
 DIS_N_MELS = N_GEN_MEL_CHANNELS
 DIS_HOP_LEN = VIS_HOP_LEN
+
 
 
 
@@ -119,41 +122,10 @@ EPSILON = 1e-9
 
 TOTAL_SAMPLES_IN = int(SAMPLE_RATE * INPUT_DURATION)
 TOTAL_SAMPLES_OUT = int(SAMPLE_RATE * OUTPUT_DURATION)
-#N_BATCHES = int(TOTAL_SAMPLES_OUT // BATCH_SIZE)
-#if TOTAL_SAMPLES_OUT % BATCH_SIZE != 0:
-#    raise ValueError("Could not calculate N_BATCHES: Total length of audio not divisible by", (BATCH_SIZE))
-#N_TIMESTEPS_PER_KERNEL = int(SAMPLE_RATE*OUTPUT_DURATION // (GEN_KERNEL_SIZE_DOWNSCALING * N_BATCHES))
-#SAMPLES_PER_BATCH = int(TOTAL_SAMPLES_OUT // N_BATCHES)
-#if TOTAL_SAMPLES_OUT % N_BATCHES != 0:
-#    raise ValueError("Could not calculate SAMPLES_PER_BATCH: Total length of audio not divisible by", N_BATCHES)
+
 KONTROL_SECONDS = KONTROL_SAMPLES/SAMPLE_RATE
 
 GEN_N_FRAMES = librosa.samples_to_frames(TOTAL_SAMPLES_OUT, GEN_HOP_LEN, N_GEN_FFT)
-
-def print_global_constants():
-    print("v-"*39 + "v")
-    print("Total # of input samples:", TOTAL_SAMPLES_IN)
-    print("Timesteps per kernel:", N_TIMESTEPS_PER_KERNEL)
-    print("Batches per layer:", N_BATCHES)
-    print("Samples per batch:", SAMPLES_PER_BATCH)
-    print("Number of channels:", N_CHANNELS)
-    # if GEN_MODE == 1:
-    #     cprint("Will create", N_RNN_LAYERS, "layers of", N_UNITS, "units.")
-    # elif GEN_MODE == 0:
-    #     cprint("Will create 1 Pre-Dense layer of", SAMPLES_PER_BATCH, "filters.")    
-    #     if N_PRE_DENSE_LAYERS > 1:
-    #         cprint("Will create", N_PRE_DENSE_LAYERS-1, "Pre-Dense layers of", N_UNITS*N_TIMESTEPS, "filters.")
-    #     cprint("Will create", N_DENSE_LAYERS-1, "Dense layers of", SAMPLES_PER_BATCH, "units.")
-    #     cprint("Will create 1 Dense layer of", SAMPLES_PER_BATCH, "units.")
-    #     if N_POST_DENSE_LAYERS > 1:
-    #         for i in range(1,N_POST_DENSE_LAYERS):
-    #                 n_filts = i*N_POST_DENSE_FILTERS
-    #                 cprint("Will create 1 Post-Dense layer of", n_filts, "filters.")
-    #     else:
-    #         cprint("Will create 1 Post-Dense layer of", N_UNITS*N_TIMESTEPS//20, "filters.")
-    output_samples = N_BATCHES*N_CHANNELS*N_TIMESTEPS_PER_KERNEL*GEN_KERNEL_SIZE_DOWNSCALING
-    print("Total # of output samples:", output_samples)
-    print("^-"*39 + "^")
 
 def v_cprint(*s):
     if VERBOSITY_LEVEL >= 1:

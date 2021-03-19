@@ -11,102 +11,59 @@ from hilbert import *
 import os
 import inspect
 
-class TADiscriminator(keras.Model):
-    def __init__(self, *args, **kwargs):
-        super(TADiscriminator, self).__init__(*args, **kwargs)
+class ClipConstraint(keras.constraints.Constraint):
+    def __init__(self, clip_value):
+        self.clip_value = clip_value
+    
+    def __call__(self, weights):
+        return K.clip(weights, -self.clip_value, self.clip_value)
+    
+    def get_config(self):
+        return {'clip_value': self.clip_value}
 
-        self.ksz = DIS_KERNEL_SIZE
-        self.stride = DIS_STRIDE
-        if DIS_MODE in [0, 3]:
-            self.ndf = 2
-            self.samps = TOTAL_SAMPLES_OUT * 2
-            x = self.samps
-        elif DIS_MODE == 1:
-            self.ndf = TOTAL_SAMPLES_OUT
-        elif DIS_MODE == 2:
-            self.ndf = 1
-            x = DIS_N_MELS
-            y = librosa.samples_to_frames(TOTAL_SAMPLES_OUT, DIS_HOP_LEN, DIS_N_FFT)
-            self.samps = x*y
-        else:
-            raise ValueError("Invalid discriminator mode!")
+def create_discriminator():
+    x = TOTAL_SAMPLES_OUT * 2
+    
+    initializer = keras.initializers.HeNormal()
+    # const = ClipConstraint(0.01)
+
+    net = []
+    i = 0
+    c = 2 * 2
+    n = 2
+    k1 = DIS_KERNEL_SIZE
+    s1 = DIS_STRIDE
+    k2 = DIS_KERNEL_SIZE
+    s2 = DIS_STRIDE
+    while x > 256:
+        c = min(DIS_MAX_CHANNELS, int(2 * 2**i))
+        n = min(DIS_MAX_CHANNELS, int(2 * 2**(i+1)))
+        if x <= DIS_KERNEL_SIZE:
+            s1 = 1
+            k1 = 1
         
-
-        self.net = []
-        #self.net.append(nn.Identity())
-        i = 0
-        c = self.ndf * 2
-        n = self.ndf
-        k1 = self.ksz
-        s1 = self.stride
-        k2 = self.ksz
-        s2 = self.stride
-        while self.samps > 256:
-            c = min(DIS_MAX_CHANNELS, int(self.ndf * 2**i))
-            n = min(DIS_MAX_CHANNELS, int(self.ndf * 2**(i+1)))
-            
-            # if y <= self.ksz:
-            #     k2 = 1
-            #     s2 = 1
-            
-            if x <= self.ksz:
-                s1 = 1
-                k1 = 1
-            
-            i += 1
-            #sqrt_samps = int(np.sqrt(self.samps))
-            x = (x - (k1 - 1) - 1) // s1 + 1
-            #y = (y - (k2 - 1) - 1) // s2 + 1
-            self.samps = x
-            
-            self.net.append(layers.Conv1D(n, k1, s1, use_bias=True))
-            #self.net.append(layers.BatchNormalization())
-            self.net.append(layers.Dropout(DIS_DROPOUT))
-            self.net.append(layers.LeakyReLU(0.2))
-            #v_cprint("Created Conv2d layer #{6} with c={0} n={1} k=({2}, {3}) s=({4}, {5})\tsamps={7}".format(c, n, k1, s1, i, self.samps))
-        print("Created", i, "sets of Discriminator layers.")
+        i += 1
         x = (x - (k1 - 1) - 1) // s1 + 1
-        #y = (y - (k2 - 1) - 1) // s2 + 1
-        #self.samps = x*y
-        #self.net.append(layers.Conv1D(1, 1, 1, use_bias=False))
-        self.net.append(layers.Flatten())
-        self.net.append(layers.Dense(128))
-        self.net.append(layers.Dense(64))
-        self.net.append(layers.Dense(32))
-        self.net.append(layers.Dense(16))
-        self.net.append(layers.Dense(8))
-        self.net.append(layers.Dense(1))
-    
-    def dis_fn(self, inp):
-        if DIS_MODE == 0:
-            raise NotImplementedError
-        elif DIS_MODE == 1:
-            raise NotImplementedError("NYI")
-            # fft1 = ag.Variable(torch.unsqueeze(
-            #     torch.fft.fft(inp.to(torch.float), norm='forward'), -1), requires_grad=True)
-            # mag = ag.Variable(torch.square(torch.real(fft1)) + torch.square(torch.imag(fft1)), requires_grad=True)
-            # pha = ag.Variable(torch.atan2(torch.real(fft1), torch.imag(fft1)), requires_grad=True)
-            # actual_input = ag.Variable(torch.stack((mag, pha)).permute(0,1,2), requires_grad=True)
-        elif DIS_MODE == 2:
-            raise NotImplementedError
-            # # what an ugly line of code
-            # if N_GEN_MEL_CHANNELS in inp.shape or DIS_N_MELS in inp.shape:
-            #     actual_input = inp.to(torch.float).unsqueeze(0)
-            # else:
-            #     melspec = AudioToMelWithGradients.apply(inp.to(torch.float), DIS_N_FFT, DIS_N_MELS, DIS_HOP_LEN).requires_grad_(True)
-            #     if torch.is_grad_enabled():
-            #         melspec.retain_grad()
-            #     actual_input = melspec.unsqueeze(1).requires_grad_(True)
-            #     if torch.is_grad_enabled():
-            #         actual_input.retain_grad()
-        elif DIS_MODE == 3:
-            actual_input = tf.reshape(audio_to_specgram(tf.reshape(inp, [inp.shape[0], -1])), [inp.shape[0], self.ndf, -1])[..., :TOTAL_SAMPLES_OUT]
+        net.append(layers.Conv1D(n, k1, s1, kernel_initializer=initializer))
+        #self.net.append(layers.BatchNormalization())
+        #self.net.append(layers.Dropout(DIS_DROPOUT))
+        net.append(layers.LeakyReLU(0.2))
+    print("Created", i, "sets of Discriminator Conv layers.")
+    net.append(layers.Flatten())
+    net.append(layers.Dense(128))
+    net.append(layers.Dense(64))
+    net.append(layers.Dense(32))
+    net.append(layers.Dense(16))
+    net.append(layers.Dense(8))
+    net.append(layers.Dense(1))
 
-        verdicts = actual_input
-        for i, layer in enumerate(self.net):
-            verdicts = layer(verdicts)
-        
-        return tf.squeeze(verdicts)
+    net = keras.Sequential(net)
+    net.build([None, TOTAL_SAMPLES_OUT, 2])
+    return net
     
-    def call(self, inputs):
-        return self.dis_fn(inputs)
+def discriminator(dis_net, data, training=True):
+    data = audio_to_specgram(data)
+
+    verdicts = dis_net(data, training=training)
+    
+    return tf.squeeze(verdicts)
