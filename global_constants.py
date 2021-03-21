@@ -1,3 +1,5 @@
+import librosa
+import numpy as np
 RESOURCES_DIR = "C:\\tensaudio_resources\\"
 
 PLOTS_DIR = "D:\\tensaudio_plots\\"
@@ -11,7 +13,7 @@ DATASET_DIRNAME = "piano/ta"
 VIS_WIDTH = 1600
 VIS_HEIGHT = 900
 
-VIS_UPDATE_INTERVAL = 1 # iterations
+VIS_UPDATE_INTERVAL = 1  # iterations
 
 VIS_N_FFT = 2048
 VIS_HOP_LEN = VIS_N_FFT//4
@@ -22,18 +24,18 @@ MAX_ITERS_PER_SEC = 0
 SAVE_EVERY_EPOCH = 10
 SAVE_EVERY_BATCHES = 54
 
-VERBOSITY_LEVEL = 1 # 0, 1, 2
+VERBOSITY_LEVEL = 1  # 0, 1, 2
 
 GRIFFIN_LIM_MAX_ITERS_PREVIEW = 0
 GRIFFIN_LIM_MAX_ITERS_SAVING = 0
 
 # Hyperparameters
-GEN_LR = 0.0004
+GEN_LR = 0.0008
 DIS_LR = 0.0004
 BETA = 0.0
 #GEN_MOMENTUM = 0.01
 
-BATCH_SIZE = 35 # lower = faster but lower quality training (must be 2 or greater)
+BATCH_SIZE = 35
 N_CRITIC = 1
 N_GEN = 3
 
@@ -41,13 +43,13 @@ N_GEN = 3
 # MODEL_DIR/gen_ckpts folder or the generator model will give
 # an error!
 GEN_MODE = 6            # 0 = TBI
-                        # 1 = TBI
-                        # 2 = TBI
-                        # 3 = Conv/Audio mode
-                        # 4 = Conv/Mel mode (WIP)
-                        # 5 = Conv/STFT "Specgram" mode ([batch, 2, bin, frame])
-                        # 6 = Conv/Hilbert "Specgram" mode ([batch, 2, time])
-                        # 10 = CSound Synthesizer mode
+# 1 = TBI
+# 2 = TBI
+# 3 = Conv/Audio mode
+# 4 = Conv/Mel mode (WIP)
+# 5 = Conv/STFT "Specgram" mode ([batch, 2, bin, frame])
+# 6 = Conv/Hilbert "Specgram" mode ([batch, 2, time])
+# 10 = CSound Synthesizer mode
 USE_REAL_AUDIO = False
 SAMPLE_RATE = 22050
 GEN_SAMPLE_RATE_FACTOR = 1
@@ -57,9 +59,12 @@ OUTPUT_DURATION = 2
 
 GEN_INITIAL_LIN_SCALE = 1          # higher = more memory, must be 1 or greater
 GEN_MAX_LIN_FEATURES = 4096
-GEN_KERNEL_SIZE_UPSCALING = 53    # higher = more memory, supposedly odd numbers work better
-GEN_STRIDE_UPSCALING = 2      # higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
-GEN_KERNEL_SIZE_DOWNSCALING = 53   # higher = more memory, supposedly odd numbers work better
+# higher = more memory, supposedly odd numbers work better
+GEN_KERNEL_SIZE_UPSCALING = 53
+# higher = more memory, must be greater than GEN_STRIDE_DOWNSCALING
+GEN_STRIDE_UPSCALING = 2
+# higher = more memory, supposedly odd numbers work better
+GEN_KERNEL_SIZE_DOWNSCALING = 53
 GEN_STRIDE_DOWNSCALING = 1          # must be 1 or greater
 GEN_MIN_LAYERS = 1
 GEN_MAX_CHANNELS = 4
@@ -90,9 +95,9 @@ TOTAL_PARAM_UPDATES = SAMPLE_RATE*OUTPUT_DURATION//PARAM_UPDATE_SAMPLES
 # an error!
 
 DIS_MODE = 3            # 0 = Direct mode
-                        # 1 = FFT mode
-                        # 2 = Mel mode
-                        # 3 = Specgram mode
+# 1 = FFT mode
+# 2 = Mel mode
+# 3 = Specgram mode
 REAL_LABEL = -1.
 FAKE_LABEL = 1.
 PHASE_SHUFFLE = 0.03
@@ -106,17 +111,9 @@ DIS_N_MELS = N_GEN_MEL_CHANNELS
 DIS_HOP_LEN = VIS_HOP_LEN
 
 
-
-
-
-
-
-
 # DO NOT CHANGE ANYTHING BELOW THIS LINE!
 # ---------------------------------------------------------------------------------
 
-import numpy as np
-import librosa
 
 EPSILON = 1e-9
 
@@ -125,11 +122,15 @@ TOTAL_SAMPLES_OUT = int(SAMPLE_RATE * OUTPUT_DURATION)
 
 KONTROL_SECONDS = KONTROL_SAMPLES/SAMPLE_RATE
 
-GEN_N_FRAMES = librosa.samples_to_frames(TOTAL_SAMPLES_OUT, GEN_HOP_LEN, N_GEN_FFT)
+GEN_N_FRAMES = librosa.samples_to_frames(
+    TOTAL_SAMPLES_OUT, GEN_HOP_LEN, N_GEN_FFT)
+
 
 def v_cprint(*s):
     if VERBOSITY_LEVEL >= 1:
         print(*s)
+
+
 def vv_cprint(*s):
     if VERBOSITY_LEVEL >= 2:
         print(*s)

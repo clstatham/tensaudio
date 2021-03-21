@@ -29,13 +29,17 @@ from global_constants import *
 
 #     return x
 
-#https://github.com/magenta/magenta/blob/c1340b2788af9bc193ef23e1ecec3fabf13d0a14/magenta/models/gansynth/lib/layers.py#L30
+# https://github.com/magenta/magenta/blob/c1340b2788af9bc193ef23e1ecec3fabf13d0a14/magenta/models/gansynth/lib/layers.py#L30
+
+
 def pixel_norm(images, epsilon=1.0e-8):
-    a = tf.math.rsqrt(tf.reduce_mean(tf.math.square(images), axis=-1, keepdims=True) + epsilon)
+    a = tf.math.rsqrt(tf.reduce_mean(tf.math.square(
+        images), axis=-1, keepdims=True) + epsilon)
     if tf.reduce_all(tf.math.is_finite(a)):
         return images * a
     else:
         return images
+
 
 class TAConv1D(layers.Layer):
     def __init__(self, filters, kernel_size, groups=1, strides=1, use_bias=True, **kwargs):
@@ -46,13 +50,14 @@ class TAConv1D(layers.Layer):
         # self.use_bias = use_bias
         self.init = keras.initializers.HeNormal()
         self.conv = layers.Conv1D(
-            filters, kernel_size, strides, 
-            use_bias=use_bias, 
-            groups=groups, 
-            padding="same", 
-            kernel_initializer=self.init, 
+            filters, kernel_size, strides,
+            use_bias=use_bias,
+            groups=groups,
+            padding="same",
+            kernel_initializer=self.init,
             name='TAConv1D', **kwargs
         )
+
     def call(self, x):
         return pixel_norm(tf.nn.leaky_relu(self.conv(x), 0.2))
 
@@ -61,15 +66,16 @@ class SubpixelUpscaling1D(keras.layers.Layer):
     def __init__(self, r):
         super().__init__(trainable=False)
         self.r = r
-    
+
     def call(self, x):
         _, _, rc = x.get_shape()
         assert rc % self.r == 0
         #c = rc / r
-        y = tf.transpose(x, [2,1,0])
-        y = tf.batch_to_space(y, [self.r], [[0,0]])
-        y = tf.transpose(y, [2,1,0])
+        y = tf.transpose(x, [2, 1, 0])
+        y = tf.batch_to_space(y, [self.r], [[0, 0]])
+        y = tf.transpose(y, [2, 1, 0])
         return y
+
 
 class TAInitialGeneratorModule(layers.Layer):
     def __init__(self, filters, kernel_size, input_shape):
@@ -82,6 +88,7 @@ class TAInitialGeneratorModule(layers.Layer):
         x = pixel_norm(x)
         x = self.conv2d_1(x)
         return x
+
 
 class TAGeneratorModule(layers.Layer):
     def __init__(self, filters, kernel_size, idx, scale1=2, scale2=2):
@@ -97,6 +104,7 @@ class TAGeneratorModule(layers.Layer):
         x = self.spu(x)
         return x
 
+
 class TAFinalGeneratorModule(layers.Layer):
     def __init__(self):
         super().__init__(True, 'TAFinalGeneratorModule')
@@ -104,28 +112,10 @@ class TAFinalGeneratorModule(layers.Layer):
     def call(self, x):
         x_split = tf.split(x, x.shape[-1]//2, axis=-1)
         y = tf.reduce_mean(tf.stack(x_split, -1), -1)
-        # lods = _lods.copy()
-        # new_lods = []
-        # alphas = K.softmax(K.arange(0.1, 1.0, 1.0/len(lods)))
-        # for i, lod in enumerate(lods):
-        #     if lod.shape[-1] == lods[-1].shape[-1]:
-        #         lods[i] *= alphas[i]
-        #         lods[i] = tf.reshape(lods[i], [lods[i].shape[0], -1])
-        #         factor = int(np.ceil(2*TOTAL_SAMPLES_OUT / lods[i].shape[-1]))
-        #         if factor <= 1:
-        #             new_lods += [lods[i][:, :TOTAL_SAMPLES_OUT*2]]
-        # y = tf.stack(new_lods, -1)
-        # y = tf.reduce_sum(y, -1)
-        #y = lods[-1]
-        #y = tf.nn.depth_to_space(y, 16)
-        #y = tf.reshape(y, [y.shape[0], 2, -1])
-        #y = tf.expand_dims(x, 1)
-        #y = SubpixelUpscaling1D(y.shape[-1]//2)(y)
-        return K.tanh(y)
+        return y
 
 
-
-def create_generator(dim = 16, base_scale = 2, max_scale = 2):
+def create_generator(dim=16, base_scale=2, max_scale=2):
     def gen_scale(step):
         return min(max_scale, base_scale ** step)
 
@@ -137,13 +127,8 @@ def create_generator(dim = 16, base_scale = 2, max_scale = 2):
     dummy = tf.Variable(generate_input_noise(), trainable=False)
 
     n_sets = 0
-    
-    prob = 0.01
-    s_us = 2
-    k_us = 33
-    k_div = 8
-    s_ds = 2
-    k_ds = 2    
+
+    k_us = 333
     dim_mul = 16
 
     net = [
@@ -155,7 +140,8 @@ def create_generator(dim = 16, base_scale = 2, max_scale = 2):
     net.append(TAInitialGeneratorModule(dim, 3, dummy.shape))
     dummy = net[-1](dummy)
     while dummy.shape[-2] < TOTAL_SAMPLES_OUT:
-        net.append(TAGeneratorModule(dim*dim_mul, k_us, idx=n_sets, scale1=gen_scale(n_sets), scale2=2))
+        net.append(TAGeneratorModule(dim*dim_mul, k_us,
+                   idx=n_sets, scale1=gen_scale(n_sets), scale2=2))
         dummy = net[-1](dummy)
 
         pool_scale = dummy.shape[-2]//TOTAL_SAMPLES_OUT
@@ -167,26 +153,26 @@ def create_generator(dim = 16, base_scale = 2, max_scale = 2):
         dim_mul = max(dim_mul, 2)
         n_sets += 1
     print("Created", n_sets, "sets of Generator layers.")
-    
+
     net.append(TAFinalGeneratorModule())
     dummy = net[-1](dummy)
-    v_cprint("Created final layers.")
-    v_cprint("Final shape:", list(dummy.shape))
-    
+    v_cprint("Generator output shape:", list(dummy.shape))
+
     net = keras.Sequential(net)
     for layer in net.layers:
         if not layer.trainable:
             layer.trainable = True
     return net
 
+
 def generator(gen_net, data, training):
     post_net = gen_net(data, training=training)
 
     specgram = tf.stack([
-        K.sigmoid(post_net[:,:,0]),
-        linear_to_mel(post_net[:,:,1])
-        ], axis=-1)
+        K.sigmoid(post_net[:, :, 0]),
+        linear_to_mel(K.tanh(post_net[:, :, 1]))
+    ], axis=-1)
 
     ret = specgram_to_audio(tf.squeeze(specgram))
-    
+
     return ret[:, :TOTAL_SAMPLES_OUT]

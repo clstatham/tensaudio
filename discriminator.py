@@ -11,19 +11,21 @@ from hilbert import *
 import os
 import inspect
 
+
 class ClipConstraint(keras.constraints.Constraint):
     def __init__(self, clip_value):
         self.clip_value = clip_value
-    
+
     def __call__(self, weights):
         return K.clip(weights, -self.clip_value, self.clip_value)
-    
+
     def get_config(self):
         return {'clip_value': self.clip_value}
 
+
 def create_discriminator():
     x = TOTAL_SAMPLES_OUT * 2
-    
+
     initializer = keras.initializers.HeNormal()
     # const = ClipConstraint(0.01)
 
@@ -41,12 +43,12 @@ def create_discriminator():
         if x <= DIS_KERNEL_SIZE:
             s1 = 1
             k1 = 1
-        
+
         i += 1
         x = (x - (k1 - 1) - 1) // s1 + 1
         net.append(layers.Conv1D(n, k1, s1, kernel_initializer=initializer))
-        #self.net.append(layers.BatchNormalization())
-        #self.net.append(layers.Dropout(DIS_DROPOUT))
+        # self.net.append(layers.BatchNormalization())
+        # self.net.append(layers.Dropout(DIS_DROPOUT))
         net.append(layers.LeakyReLU(0.2))
     print("Created", i, "sets of Discriminator Conv layers.")
     net.append(layers.Flatten())
@@ -60,10 +62,11 @@ def create_discriminator():
     net = keras.Sequential(net)
     net.build([None, TOTAL_SAMPLES_OUT, 2])
     return net
-    
+
+
 def discriminator(dis_net, data, training=True):
     data = audio_to_specgram(data)
 
     verdicts = dis_net(data, training=training)
-    
+
     return tf.squeeze(verdicts)
